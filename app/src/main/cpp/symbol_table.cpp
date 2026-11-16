@@ -10,6 +10,18 @@
 extern "C" {
     void shim_nn_init_Start();
     uint32_t shim_nn_os_SetMemoryHeapSize(uint64_t requestedSize);
+    uint32_t shim_nn_os_AllocateMemoryBlock(uintptr_t* outAddress, size_t size);
+    void shim_StandardAllocator_ctor(void* thisPtr);
+    void shim_StandardAllocator_Init(void* thisPtr, void* addr, size_t size, bool isCacheEnable);
+    void* shim_StandardAllocator_Alloc(void* thisPtr, size_t size);
+    void* shim_StandardAllocator_AllocAligned(void* thisPtr, size_t size, size_t alignment);
+    void* shim_StandardAllocator_Realloc(void* thisPtr, void* ptr, size_t newSize);
+    void shim_StandardAllocator_Free(void* thisPtr, void* ptr);
+    void shim_nn_os_InitializeMutex(void* mutexPtr, bool recursive, int lockLevel);
+    void shim_nn_os_LockMutex(void* mutexPtr);
+    void shim_nn_os_UnlockMutex(void* mutexPtr);
+    int64_t shim_nn_os_GetSystemTick();
+    int64_t shim_nn_os_GetSystemTickFrequency();
     uint32_t shim_nn_fs_MountRom(const char* name, void* cacheBuffer, uint64_t cacheSize);
     void* shim_nvnBootstrapLoader(const char* procName);
 }
@@ -40,6 +52,18 @@ extern "C" int* shim_errno_location() {
 static std::unordered_map<std::string, void*> g_Symbols = {
     {"_ZN2nn4init5StartEv", reinterpret_cast<void*>(&shim_nn_init_Start)},
     {"_ZN2nn2os17SetMemoryHeapSizeEm", reinterpret_cast<void*>(&shim_nn_os_SetMemoryHeapSize)},
+    {"_ZN2nn2os19AllocateMemoryBlockEPmm", reinterpret_cast<void*>(&shim_nn_os_AllocateMemoryBlock)},
+    {"_ZN2nn3mem17StandardAllocatorC1Ev", reinterpret_cast<void*>(&shim_StandardAllocator_ctor)},
+    {"_ZN2nn3mem17StandardAllocator10InitializeEPvmb", reinterpret_cast<void*>(&shim_StandardAllocator_Init)},
+    {"_ZN2nn3mem17StandardAllocator8AllocateEm", reinterpret_cast<void*>(&shim_StandardAllocator_Alloc)},
+    {"_ZN2nn3mem17StandardAllocator8AllocateEmm", reinterpret_cast<void*>(&shim_StandardAllocator_AllocAligned)},
+    {"_ZN2nn3mem17StandardAllocator10ReallocateEPvm", reinterpret_cast<void*>(&shim_StandardAllocator_Realloc)},
+    {"_ZN2nn3mem17StandardAllocator4FreeEPv", reinterpret_cast<void*>(&shim_StandardAllocator_Free)},
+    {"_ZN2nn2os15InitializeMutexEPNS0_9MutexTypeEbi", reinterpret_cast<void*>(&shim_nn_os_InitializeMutex)},
+    {"_ZN2nn2os9LockMutexEPNS0_9MutexTypeE", reinterpret_cast<void*>(&shim_nn_os_LockMutex)},
+    {"_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE", reinterpret_cast<void*>(&shim_nn_os_UnlockMutex)},
+    {"_ZN2nn2os13GetSystemTickEv", reinterpret_cast<void*>(&shim_nn_os_GetSystemTick)},
+    {"_ZN2nn2os22GetSystemTickFrequencyEv", reinterpret_cast<void*>(&shim_nn_os_GetSystemTickFrequency)},
     {"_ZN2nn2fs8MountRomEPKcPvm", reinterpret_cast<void*>(&shim_nn_fs_MountRom)},
     {"nvnBootstrapLoader", reinterpret_cast<void*>(&shim_nvnBootstrapLoader)},
     {"__cxa_pure_virtual", reinterpret_cast<void*>(&shim_cxa_pure_virtual)},
@@ -60,7 +84,6 @@ void* resolveSymbol(const char* name) {
         return it->second;
     }
 
-    // Sambungkan otomatis fungsi standar C / Math / POSIX dari Android libc & libm
     void* nativeSym = dlsym(RTLD_DEFAULT, name);
     if (nativeSym != nullptr) {
         g_Symbols[name] = nativeSym;

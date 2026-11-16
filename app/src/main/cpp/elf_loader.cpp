@@ -10,10 +10,13 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include <string>
 
 static uint8_t* g_ElfBase = nullptr;
 static uint8_t* g_SwitchTls = nullptr;
 static uint64_t g_AndroidTls = 0;
+static std::vector<uint64_t> g_InitArrayFns;
+static void* g_NnMainPtr = nullptr;
 
 static inline uint64_t getTpidrEl0() {
     uint64_t val;
@@ -104,6 +107,9 @@ static void patchSwitchInstructions(uint32_t* code, size_t count) {
 }
 
 void* loadSwitchElf(const char* elfPath) {
+    g_InitArrayFns.clear();
+    g_NnMainPtr = nullptr;
+
     FILE* f = fopen(elfPath, "rb");
     if (!f) {
         writeLog("[ERROR] File tidak ditemukan atau izin ditolak: %s", elfPath);
@@ -136,8 +142,7 @@ void* loadSwitchElf(const char* elfPath) {
     }
 
     size_t totalMem = maxVaddr - minVaddr;
-    writeLog("[ELF] Alokasi memori kode game: %.2f MB (entry offset: 0x%llx)",
-             totalMem / (1024.0 * 1024.0), (unsigned long long)(ehdr->e_entry - minVaddr));
+    writeLog("[ELF] Alokasi memori kode game: %.2f MB", totalMem / (1024.0 * 1024.0));
 
     uint8_t* base = reinterpret_cast<uint8_t*>(
         mmap(nullptr, totalMem, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -153,13 +158,19 @@ void* loadSwitchElf(const char* elfPath) {
         if (phdrs[i].p_type == PT_LOAD) {
             uint8_t* dest = base + (phdrs[i].p_vaddr - minVaddr);
             memcpy(dest, buf.data() + phdrs[i].p_offset, phdrs[i].p_filesz);
-            if (phdrs[i].p_flags & PF_X) {
+            if (i == 0 || (phdrs[i].p_flags & PF_X)) {
                 patchSwitchInstructions(reinterpret_cast<uint32_t*>(dest), phdrs[i].p_filesz / 4);
             }
         }
     }
 
+    auto* words = reinterpret_cast<uint32_t*>(base);
+    writeLog("[ELF] Header 0x0: [0x%08x, 0x%08x, 0x%08x, 0x%08x]",
+             words[0], words[1], words[2], words[3]);
+
     auto* shdrs = reinterpret_cast<Elf64_Shdr*>(buf.data() + ehdr->e_shoff);
+
+    // 1. Proses relokasi pointer dan simbol eksternal
     for (int i = 0; i < ehdr->e_shnum; ++i) {
         if (shdrs[i].sh_type == SHT_RELA) {
             auto* relas = reinterpret_cast<Elf64_Rela*>(buf.data() + shdrs[i].sh_offset);
@@ -189,17 +200,69 @@ void* loadSwitchElf(const char* elfPath) {
         }
     }
 
-    void* entry = base + (ehdr->e_entry - minVaddr);
+    // 2. Cari simbol entry point game asli (nnMain / nninitStartup)
+    for (int i = 0; i < ehdr->e_shnum; ++i) {
+        if (shdrs[i].sh_type == SHT_DYNSYM || shdrs[i].sh_type == SHT_SYMTAB) {
+            auto* syms = reinterpret_cast<Elf64_Sym*>(buf.data() + shdrs[i].sh_offset);
+            size_t symCount = shdrs[i].sh_size / sizeof(Elf64_Sym);
+            const char* strtab = reinterpret_cast<const char*>(buf.data() + shdrs[shdrs[i].sh_link].sh_offset);
+
+            for (size_t s = 0; s < symCount; ++s) {
+                if (syms[s].st_shndx != SHN_UNDEF && syms[s].st_name != 0) {
+                    const char* symName = strtab + syms[s].st_name;
+                    if (strcmp(symName, "nnMain") == 0) {
+                        g_NnMainPtr = base + (syms[s].st_value - minVaddr);
+                        writeLog("[ELF] Ditemukan simbol nnMain di offset 0x%llx",
+                                 (unsigned long long)(syms[s].st_value - minVaddr));
+                    } else if (strcmp(symName, "nninitStartup") == 0 && !g_NnMainPtr) {
+                        g_NnMainPtr = base + (syms[s].st_value - minVaddr);
+                        writeLog("[ELF] Ditemukan simbol nninitStartup di offset 0x%llx",
+                                 (unsigned long long)(syms[s].st_value - minVaddr));
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Kumpulkan fungsi konstruktor C++ (.init_array) setelah relokasi selesai
+    for (int i = 0; i < ehdr->e_shnum; ++i) {
+        if (shdrs[i].sh_type == SHT_INIT_ARRAY) {
+            uint64_t* arr = reinterpret_cast<uint64_t*>(base + (shdrs[i].sh_addr - minVaddr));
+            size_t count = shdrs[i].sh_size / sizeof(uint64_t);
+            for (size_t k = 0; k < count; ++k) {
+                if (arr[k] != 0 && arr[k] != UINT64_MAX) {
+                    g_InitArrayFns.push_back(arr[k]);
+                }
+            }
+            writeLog("[ELF] Ditemukan %zu konstruktor C++ di .init_array", g_InitArrayFns.size());
+        }
+    }
+
+    void* entry = g_NnMainPtr ? g_NnMainPtr : (base + (ehdr->e_entry - minVaddr));
     buf.clear();
     buf.shrink_to_fit();
     return entry;
 }
 
 void jumpToSwitchEntry(void* entryPoint) {
-    writeLog("[BOOT] Melompat ke entry point main.elf di %p...", entryPoint);
+    using Fn = void (*)();
+
+    if (!g_InitArrayFns.empty()) {
+        writeLog("[BOOT] Menjalankan %zu konstruktor global C++ (.init_array)...", g_InitArrayFns.size());
+        setTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
+        for (size_t i = 0; i < g_InitArrayFns.size(); ++i) {
+            reinterpret_cast<Fn>(g_InitArrayFns[i])();
+        }
+        setTpidrEl0(g_AndroidTls);
+        writeLog("[BOOT] Semua konstruktor .init_array selesai.");
+    }
+
+    uint64_t offset = reinterpret_cast<uint64_t>(entryPoint) - reinterpret_cast<uint64_t>(g_ElfBase);
+    writeLog("[BOOT] Memanggil nnMain() di %p (Offset ELF: 0x%llx)...",
+             entryPoint, (unsigned long long)offset);
+
     setTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
-    using EntryFn = void (*)();
-    reinterpret_cast<EntryFn>(entryPoint)();
+    reinterpret_cast<Fn>(entryPoint)();
     setTpidrEl0(g_AndroidTls);
-    writeLog("[BOOT] Entry point selesai dieksekusi.");
+    writeLog("[BOOT] nnMain() selesai dieksekusi.");
 }
