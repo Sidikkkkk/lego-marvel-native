@@ -15,6 +15,8 @@ alignas(64) static uint8_t g_DummyMainThread[512] = {0};
 static const char* g_DummyArgv[] = {"LegoMarvel.nss", nullptr};
 static bool g_LoggedHeapReject = false;
 
+extern uint64_t getElfOffsetFromAddr(void* addr);
+
 extern "C" {
 
 void shim_nn_init_Start() {
@@ -107,6 +109,27 @@ bool shim_nn_os_TryAcquireSemaphore(void* semaPtr) { return true; }
 void shim_nn_os_ReleaseSemaphore(void* semaPtr, int count) {}
 void shim_nn_os_FinalizeSemaphore(void* semaPtr) {}
 
+uint32_t shim_nn_os_CreateThread(void* thread, void* fn, void* arg, void* stack, size_t stackSize, int priority) {
+    ScopedAndroidTls tls;
+    if (thread) memset(thread, 0, 256);
+    writeLog("[OS] nn::os::CreateThread(fn=0x%llx, stack=%zu KB, prio=%d)",
+             (unsigned long long)getElfOffsetFromAddr(fn), stackSize / 1024, priority);
+    return 0;
+}
+
+uint32_t shim_nn_os_CreateThreadCore(void* thread, void* fn, void* arg, void* stack, size_t stackSize, int priority, int core) {
+    ScopedAndroidTls tls;
+    if (thread) memset(thread, 0, 256);
+    writeLog("[OS] nn::os::CreateThreadCore(fn=0x%llx, core=%d, prio=%d)",
+             (unsigned long long)getElfOffsetFromAddr(fn), core, priority);
+    return 0;
+}
+
+void shim_nn_os_StartThread(void* thread) {
+    ScopedAndroidTls tls;
+    writeLog("[OS] nn::os::StartThread(%p)", thread);
+}
+
 void* shim_nn_os_GetCurrentThread() {
     return g_DummyMainThread;
 }
@@ -141,6 +164,12 @@ int64_t shim_nn_os_GetSystemTickFrequency() {
     return 19200000LL;
 }
 
+uint32_t shim_nn_time_Initialize() {
+    ScopedAndroidTls tls;
+    writeLog("[TIME] nn::time::Initialize()");
+    return 0;
+}
+
 void shim_nn_fs_SetAllocator(void* allocFn, void* deallocFn) {
     ScopedAndroidTls tls;
     writeLog("[FS] nn::fs::SetAllocator dipanggil");
@@ -149,6 +178,12 @@ void shim_nn_fs_SetAllocator(void* allocFn, void* deallocFn) {
 void shim_nv_SetGraphicsAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData) {
     ScopedAndroidTls tls;
     writeLog("[NV] nv::SetGraphicsAllocator dipanggil");
+}
+
+uint32_t shim_nv_InitializeGraphics(void* addr, size_t size) {
+    ScopedAndroidTls tls;
+    writeLog("[NV] nv::InitializeGraphics(addr=%p, size=%.2f MB)", addr, size / (1024.0 * 1024.0));
+    return 0;
 }
 
 void shim_movie_SetAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData) {

@@ -39,6 +39,9 @@ extern "C" {
     bool shim_nn_os_TryAcquireSemaphore(void* semaPtr);
     void shim_nn_os_ReleaseSemaphore(void* semaPtr, int count);
     void shim_nn_os_FinalizeSemaphore(void* semaPtr);
+    uint32_t shim_nn_os_CreateThread(void* thread, void* fn, void* arg, void* stack, size_t stackSize, int priority);
+    uint32_t shim_nn_os_CreateThreadCore(void* thread, void* fn, void* arg, void* stack, size_t stackSize, int priority, int core);
+    void shim_nn_os_StartThread(void* thread);
     void* shim_nn_os_GetCurrentThread();
     int shim_nn_os_GetHostArgc();
     const char** shim_nn_os_GetHostArgv();
@@ -46,14 +49,18 @@ extern "C" {
     void shim_nn_os_YieldThread();
     int64_t shim_nn_os_GetSystemTick();
     int64_t shim_nn_os_GetSystemTickFrequency();
+    uint32_t shim_nn_time_Initialize();
     void shim_nn_fs_SetAllocator(void* allocFn, void* deallocFn);
     void shim_nv_SetGraphicsAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData);
+    uint32_t shim_nv_InitializeGraphics(void* addr, size_t size);
     void shim_movie_SetAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData);
     uint32_t shim_nn_fs_MountRom(const char* name, void* cacheBuffer, uint64_t cacheSize);
     void* shim_nvnBootstrapLoader(const char* procName);
 }
 
 static FILE* g_NullFile = nullptr;
+static void* g_TerminateHandler = nullptr;
+
 static FILE* getSafeStdFile() {
     ScopedAndroidTls tls;
     if (!g_NullFile) {
@@ -64,6 +71,12 @@ static FILE* getSafeStdFile() {
 
 extern "C" uint32_t shim_default_stub() {
     return 0;
+}
+
+extern "C" void* shim_std_set_terminate(void* fn) {
+    void* prev = g_TerminateHandler;
+    g_TerminateHandler = fn;
+    return prev;
 }
 
 extern "C" void shim_cxa_pure_virtual() {
@@ -106,7 +119,6 @@ extern "C" void shim_exit(int code) {
     _exit(code);
 }
 
-// Alokator virtual lazy (MAP_NORESERVE) untuk blok besar >= 32 MB agar tidak memicu LMK SIGKILL
 static void* allocLazyVirtualBlock(size_t alignment, size_t size) {
     size_t pageAlign = (alignment > 4096) ? alignment : 4096;
     size_t allocSize = (size + pageAlign + 4095) & ~4095ULL;
@@ -153,7 +165,6 @@ extern "C" void* shim_realloc(void* ptr, size_t size) {
 extern "C" void shim_free(void* ptr) {
     ScopedAndroidTls tls;
     if (!ptr) return;
-    // Blok mmap lazy halaman besar tidak perlu di-free lewat Bionic Scudo agar tidak crash
     uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
     if ((addr & 0xFFF) == 0 && addr >= 0x7000000000ULL) {
         return;
@@ -185,6 +196,49 @@ extern "C" void* shim_aligned_alloc(size_t alignment, size_t size) {
     void* ptr = nullptr;
     if (posix_memalign(&ptr, alignment, size > 0 ? size : alignment) != 0) return nullptr;
     return ptr;
+}
+
+extern "C" int shim_printf(const char* format, ...) {
+    ScopedAndroidTls tls;
+    if (!format) return 0;
+    char buf[1024];
+    va_list ap;
+    va_start(ap, format);
+    int ret = vsnprintf(buf, sizeof(buf), format, ap);
+    va_end(ap);
+    if (ret > 0) {
+        size_t len = strlen(buf);
+        if (len > 0 && buf[len - 1] == '\n') buf[len - 1] = '\0';
+        writeLog("[GAME-STDOUT] %s", buf);
+    }
+    return ret;
+}
+
+extern "C" int shim_vprintf(const char* format, va_list ap) {
+    ScopedAndroidTls tls;
+    if (!format) return 0;
+    char buf[1024];
+    int ret = vsnprintf(buf, sizeof(buf), format, ap);
+    if (ret > 0) {
+        size_t len = strlen(buf);
+        if (len > 0 && buf[len - 1] == '\n') buf[len - 1] = '\0';
+        writeLog("[GAME-STDOUT] %s", buf);
+    }
+    return ret;
+}
+
+extern "C" int shim_puts(const char* s) {
+    ScopedAndroidTls tls;
+    if (s) writeLog("[GAME-STDOUT] %s", s);
+    return 0;
+}
+
+extern "C" int shim_putchar(int c) {
+    return c;
+}
+
+extern "C" int shim_fflush(FILE* stream) {
+    return 0;
 }
 
 extern "C" size_t shim_fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
@@ -296,6 +350,9 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"_ZN2nn2os19TryAcquireSemaphoreEPNS0_13SemaphoreTypeE", reinterpret_cast<void*>(&shim_nn_os_TryAcquireSemaphore)},
     {"_ZN2nn2os16ReleaseSemaphoreEPNS0_13SemaphoreTypeEi", reinterpret_cast<void*>(&shim_nn_os_ReleaseSemaphore)},
     {"_ZN2nn2os17FinalizeSemaphoreEPNS0_13SemaphoreTypeE", reinterpret_cast<void*>(&shim_nn_os_FinalizeSemaphore)},
+    {"_ZN2nn2os12CreateThreadEPNS0_10ThreadTypeEPFvPvES3_S3_mi", reinterpret_cast<void*>(&shim_nn_os_CreateThread)},
+    {"_ZN2nn2os12CreateThreadEPNS0_10ThreadTypeEPFvPvES3_S3_mii", reinterpret_cast<void*>(&shim_nn_os_CreateThreadCore)},
+    {"_ZN2nn2os11StartThreadEPNS0_10ThreadTypeE", reinterpret_cast<void*>(&shim_nn_os_StartThread)},
     {"_ZN2nn2os16GetCurrentThreadEv", reinterpret_cast<void*>(&shim_nn_os_GetCurrentThread)},
     {"_ZN2nn2os11GetHostArgcEv", reinterpret_cast<void*>(&shim_nn_os_GetHostArgc)},
     {"_ZN2nn2os11GetHostArgvEv", reinterpret_cast<void*>(&shim_nn_os_GetHostArgv)},
@@ -303,11 +360,14 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"_ZN2nn2os11YieldThreadEv", reinterpret_cast<void*>(&shim_nn_os_YieldThread)},
     {"_ZN2nn2os13GetSystemTickEv", reinterpret_cast<void*>(&shim_nn_os_GetSystemTick)},
     {"_ZN2nn2os22GetSystemTickFrequencyEv", reinterpret_cast<void*>(&shim_nn_os_GetSystemTickFrequency)},
+    {"_ZN2nn4time10InitializeEv", reinterpret_cast<void*>(&shim_nn_time_Initialize)},
     {"_ZN2nn2fs12SetAllocatorEPFPvmEPFvS1_mE", reinterpret_cast<void*>(&shim_nn_fs_SetAllocator)},
     {"_ZN2nv20SetGraphicsAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", reinterpret_cast<void*>(&shim_nv_SetGraphicsAllocator)},
+    {"_ZN2nv18InitializeGraphicsEPvm", reinterpret_cast<void*>(&shim_nv_InitializeGraphics)},
     {"_ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", reinterpret_cast<void*>(&shim_movie_SetAllocator)},
     {"_ZN2nn2fs8MountRomEPKcPvm", reinterpret_cast<void*>(&shim_nn_fs_MountRom)},
     {"_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignEPKcm", reinterpret_cast<void*>(&shim_libcxx_string_assign)},
+    {"_ZSt13set_terminatePFvvE", reinterpret_cast<void*>(&shim_std_set_terminate)},
     {"nvnBootstrapLoader", reinterpret_cast<void*>(&shim_nvnBootstrapLoader)},
     {"__cxa_pure_virtual", reinterpret_cast<void*>(&shim_cxa_pure_virtual)},
     {"__cxa_guard_acquire", reinterpret_cast<void*>(&shim_cxa_guard_acquire)},
@@ -323,6 +383,11 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"free", reinterpret_cast<void*>(&shim_free)},
     {"posix_memalign", reinterpret_cast<void*>(&shim_posix_memalign)},
     {"aligned_alloc", reinterpret_cast<void*>(&shim_aligned_alloc)},
+    {"printf", reinterpret_cast<void*>(&shim_printf)},
+    {"vprintf", reinterpret_cast<void*>(&shim_vprintf)},
+    {"puts", reinterpret_cast<void*>(&shim_puts)},
+    {"putchar", reinterpret_cast<void*>(&shim_putchar)},
+    {"fflush", reinterpret_cast<void*>(&shim_fflush)},
     {"fwrite", reinterpret_cast<void*>(&shim_fwrite)},
     {"fprintf", reinterpret_cast<void*>(&shim_fprintf)},
     {"snprintf", reinterpret_cast<void*>(&shim_snprintf)},
