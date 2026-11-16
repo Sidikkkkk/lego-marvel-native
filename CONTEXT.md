@@ -5,20 +5,20 @@
 - **Target Device:** Semua Android ARM64 (`arm64-v8a`), dioptimalkan untuk **Low-End Devices (RAM 3-4 GB, Vulkan 1.0/1.1, Adreno / Mali / PowerVR)**.
 - **Workflow:** 100% Android Termux + GitHub Actions (Tanpa PC/Laptop).
 - **Package Name:** `com.scratch.legomarvel`
-- **Data Path di HP:** `/sdcard/Android/data/com.scratch.legomarvel/files/`
-  - `main.elf` -> Binary game Switch hasil `nx2elf`
+- **Data Path di HP:** `/sdcard/LegoPort/`
+  - `exefs/main.elf` -> Binary game Switch hasil `nx2elf`
   - `romfs/` -> Folder aset game hasil `hactool`
-  - `boot_log.txt` -> Log eksekusi, profil hardware terdeteksi, dan daftar `[MISSING SYMBOL]`
+  - `boot_log.txt` -> Log eksekusi, profil hardware, SVC Horizon OS, dan `[MISSING SYMBOL]`
 
 ## 2. Arsitektur File C++ (`app/src/main/cpp/`)
 - `device_profile.h` : Deteksi otomatis RAM fisik (`sysinfo`), klasifikasi tier (`LOW_END` <= 4.5 GB vs `STANDARD`), dan batas heap aman.
-- `logger.h` : Pencatat log real-time ke Android Logcat dan `boot_log.txt`.
-- `elf_loader.cpp` : Pemetaan segmen ELF64 (`mmap`), patch instruksi `TPIDRRO_EL0 -> TPIDR_EL0`, dan relokasi pointer.
+- `logger.h` : Pencatat log real-time ke Android Logcat dan `/sdcard/LegoPort/boot_log.txt`.
+- `elf_loader.cpp` : Pemetaan segmen ELF64 (`mmap`), patch instruksi `TPIDRRO_EL0 -> TPIDR_EL0` & `SVC -> BRK`, Switch TLR, dan signal crash handler.
 - `symbol_table.cpp` : Pemetaan nama fungsi mangled Switch (`_ZN2nn...` & `nvn*`) ke implementasi C++.
 - `shims_os.cpp` : Implementasi `nn::init`, `nn::os` (manajemen heap adaptif, thread, mutex).
-- `shims_fs.cpp` : Implementasi `nn::fs` (streaming langsung dari `romfs` tanpa memuat seluruh arsip ke RAM).
+- `shims_fs.cpp` : Implementasi `nn::fs` (streaming langsung dari `/sdcard/LegoPort/romfs`).
 - `shims_nvn.cpp` : Implementasi `nvn` ke Vulkan 1.0/1.1 multi-vendor (Adreno/Mali/PowerVR).
-- `main.cpp` : Entry point `android_main()`.
+- `main.cpp` : Entry point `android_main()` + permintaan izin `MANAGE_EXTERNAL_STORAGE` otomatis.
 
 ## 3. Instruksi untuk AI Saat Membantu Fix Bug
 1. Berikan kode **hanya untuk file yang perlu diubah** secara utuh agar mudah di-replace di Termux.

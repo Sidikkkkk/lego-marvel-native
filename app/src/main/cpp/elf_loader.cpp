@@ -2,29 +2,110 @@
 #include "symbol_table.h"
 #include "logger.h"
 #include <sys/mman.h>
+#include <signal.h>
+#include <ucontext.h>
 #include <elf.h>
+#include <unistd.h>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <vector>
 
-static void patchSwitchTls(uint32_t* code, size_t count) {
-    size_t patched = 0;
-    for (size_t i = 0; i < count; ++i) {
-        if ((code[i] & 0xFFFFFFE0) == 0xD53BD060) {
-            uint32_t reg = code[i] & 0x1F;
-            code[i] = 0xD53BD040 | reg;
-            patched++;
+static uint8_t* g_ElfBase = nullptr;
+static uint8_t* g_SwitchTls = nullptr;
+static uint64_t g_AndroidTls = 0;
+
+static inline uint64_t getTpidrEl0() {
+    uint64_t val;
+    asm volatile("mrs %0, tpidr_el0" : "=r"(val));
+    return val;
+}
+
+static inline void setTpidrEl0(uint64_t val) {
+    asm volatile("msr tpidr_el0, %0" : : "r"(val));
+}
+
+static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
+    uint64_t currentTls = getTpidrEl0();
+    if (g_AndroidTls != 0) setTpidrEl0(g_AndroidTls);
+
+    auto* uc = reinterpret_cast<ucontext_t*>(ucontext);
+    uint64_t pc = uc->uc_mcontext.pc;
+    uint64_t offset = (g_ElfBase && pc >= reinterpret_cast<uint64_t>(g_ElfBase))
+                      ? (pc - reinterpret_cast<uint64_t>(g_ElfBase)) : 0;
+
+    if (sig == SIGTRAP) {
+        uint32_t inst = *reinterpret_cast<uint32_t*>(pc);
+        if ((inst & 0xFFE0001F) == 0xD4200000) {
+            uint16_t svcId = (inst >> 5) & 0xFFFF;
+            writeLog("[SVC] Syscall Horizon OS: 0x%02X (Offset ELF: 0x%llx) | x0=0x%llx, x1=0x%llx",
+                     svcId, (unsigned long long)offset,
+                     (unsigned long long)uc->uc_mcontext.regs[0],
+                     (unsigned long long)uc->uc_mcontext.regs[1]);
+
+            uc->uc_mcontext.regs[0] = 0;
+            uc->uc_mcontext.pc += 4;
+            setTpidrEl0(currentTls);
+            return;
         }
     }
+
+    writeLog("[CRASH] Signal %d (%s) di PC=0x%llx (Offset ELF: 0x%llx) | Fault Addr=%p",
+             sig, strsignal(sig), (unsigned long long)pc, (unsigned long long)offset, info->si_addr);
+    writeLog("[CRASH] x0=0x%llx x1=0x%llx x2=0x%llx LR(x30)=0x%llx",
+             (unsigned long long)uc->uc_mcontext.regs[0],
+             (unsigned long long)uc->uc_mcontext.regs[1],
+             (unsigned long long)uc->uc_mcontext.regs[2],
+             (unsigned long long)uc->uc_mcontext.regs[30]);
+    closeLogger();
+    _exit(1);
+}
+
+void installCrashAndSvcHandlers() {
+    g_AndroidTls = getTpidrEl0();
+
+    g_SwitchTls = reinterpret_cast<uint8_t*>(
+        mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
+    );
+    memset(g_SwitchTls, 0, 4096);
+    *reinterpret_cast<uint64_t*>(g_SwitchTls + 0x1F8) = reinterpret_cast<uint64_t>(g_SwitchTls + 0x200);
+
+    struct sigaction sa{};
+    sa.sa_sigaction = nativeSignalHandler;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+
+    sigaction(SIGTRAP, &sa, nullptr);
+    sigaction(SIGSEGV, &sa, nullptr);
+    sigaction(SIGILL,  &sa, nullptr);
+    sigaction(SIGBUS,  &sa, nullptr);
+}
+
+static void patchSwitchInstructions(uint32_t* code, size_t count) {
+    size_t patchedTls = 0;
+    size_t patchedSvc = 0;
+
+    for (size_t i = 0; i < count; ++i) {
+        uint32_t inst = code[i];
+        if ((inst & 0xFFFFFFE0) == 0xD53BD060) {
+            uint32_t reg = inst & 0x1F;
+            code[i] = 0xD53BD040 | reg;
+            patchedTls++;
+        } else if ((inst & 0xFFE0001F) == 0xD4000001) {
+            uint32_t imm16 = (inst >> 5) & 0xFFFF;
+            code[i] = 0xD4200000 | (imm16 << 5);
+            patchedSvc++;
+        }
+    }
+
     __builtin___clear_cache(reinterpret_cast<char*>(code), reinterpret_cast<char*>(code + count));
-    writeLog("[PATCHER] %zu instruksi TLS ARM64 berhasil di-patch.", patched);
+    writeLog("[PATCHER] Di-patch: %zu instruksi TLS & %zu instruksi SVC Switch.", patchedTls, patchedSvc);
 }
 
 void* loadSwitchElf(const char* elfPath) {
     FILE* f = fopen(elfPath, "rb");
     if (!f) {
-        writeLog("[ERROR] File tidak ditemukan: %s", elfPath);
+        writeLog("[ERROR] File tidak ditemukan atau izin ditolak: %s", elfPath);
         return nullptr;
     }
 
@@ -64,13 +145,14 @@ void* loadSwitchElf(const char* elfPath) {
         writeLog("[ERROR] Gagal mmap memori!");
         return nullptr;
     }
+    g_ElfBase = base;
 
     for (int i = 0; i < ehdr->e_phnum; ++i) {
         if (phdrs[i].p_type == PT_LOAD) {
             uint8_t* dest = base + (phdrs[i].p_vaddr - minVaddr);
             memcpy(dest, buf.data() + phdrs[i].p_offset, phdrs[i].p_filesz);
             if (phdrs[i].p_flags & PF_X) {
-                patchSwitchTls(reinterpret_cast<uint32_t*>(dest), phdrs[i].p_filesz / 4);
+                patchSwitchInstructions(reinterpret_cast<uint32_t*>(dest), phdrs[i].p_filesz / 4);
             }
         }
     }
@@ -108,5 +190,7 @@ void* loadSwitchElf(const char* elfPath) {
     void* entry = base + (ehdr->e_entry - minVaddr);
     buf.clear();
     buf.shrink_to_fit();
+
+    setTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
     return entry;
 }
