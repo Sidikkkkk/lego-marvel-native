@@ -12,6 +12,7 @@
 
 alignas(64) static uint8_t g_DummyMainThread[512] = {0};
 static const char* g_DummyArgv[] = {"LegoMarvel.nss", nullptr};
+static bool g_LoggedHeapReject = false;
 
 extern "C" {
 
@@ -21,20 +22,29 @@ void shim_nn_init_Start() {
 
 uint32_t shim_nn_os_SetMemoryHeapSize(uint64_t requestedSize) {
     uint64_t requestedMB = requestedSize / (1024 * 1024);
-    uint64_t grantedMB = std::min(requestedMB, g_Device.safeHeapLimitMB);
-    writeLog("[OS] nn::os::SetMemoryHeapSize(diminta=%" PRIu64 " MB -> dialokasikan=%" PRIu64 " MB)",
-             requestedMB, grantedMB);
+    uint64_t limitBytes = g_Device.safeHeapLimitMB * 1024ULL * 1024ULL;
+
+    if (requestedSize > limitBytes) {
+        if (!g_LoggedHeapReject) {
+            g_LoggedHeapReject = true;
+            writeLog("[OS] nn::os::SetMemoryHeapSize(%" PRIu64 " MB) ditolak -> memaksa mode retail minimum", requestedMB);
+        }
+        return 0x202; // ResultOutOfMemory agar nninitStartup menurunkan ukuran ke batas retail
+    }
+
+    writeLog("[OS] nn::os::SetMemoryHeapSize(diminta=%" PRIu64 " MB) -> OK", requestedMB);
     return 0;
 }
 
 uint32_t shim_nn_os_AllocateMemoryBlock(uintptr_t* outAddress, size_t size) {
-    void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (ptr == MAP_FAILED) {
-        writeLog("[OS] Gagal AllocateMemoryBlock(%zu bytes)", size);
-        return 1;
+        writeLog("[OS] Gagal AllocateMemoryBlock(%zu MB)", size / (1024 * 1024));
+        return 0x202;
     }
     if (outAddress) *outAddress = reinterpret_cast<uintptr_t>(ptr);
-    writeLog("[OS] AllocateMemoryBlock(%zu bytes) -> %p", size, ptr);
+    writeLog("[OS] AllocateMemoryBlock(%zu MB) -> %p", size / (1024 * 1024), ptr);
     return 0;
 }
 

@@ -17,6 +17,7 @@ static uint8_t* g_ElfBase = nullptr;
 static uint8_t* g_SwitchTls = nullptr;
 static uint64_t g_AndroidTls = 0;
 static std::vector<uint64_t> g_InitArrayFns;
+static void* g_NnInitStartupPtr = nullptr;
 static void* g_NnMainPtr = nullptr;
 
 static volatile int g_CurrentCtorIdx = -1;
@@ -64,7 +65,7 @@ static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
     }
 
     if (sig == SIGALRM) {
-        writeLog("[TIMEOUT] Hang > 3 detik di .init_array ctor #%d (Offset ELF ctor: 0x%llx) | PC=0x%llx (Offset: 0x%llx)",
+        writeLog("[TIMEOUT] Hang > 5 detik di .init_array ctor #%d (Offset ELF ctor: 0x%llx) | PC=0x%llx (Offset: 0x%llx)",
                  g_CurrentCtorIdx, (unsigned long long)g_CurrentCtorOffset,
                  (unsigned long long)pc, (unsigned long long)offset);
         writeLog("[TIMEOUT] x0=0x%llx x1=0x%llx LR(x30)=0x%llx (Offset LR: 0x%llx)",
@@ -92,7 +93,6 @@ static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
 void installCrashAndSvcHandlers() {
     g_AndroidTls = getTpidrEl0();
 
-    // Siapkan alternate stack 64 KB agar crash akibat stack overflow/corrupt tetap tertangkap
     stack_t ss{};
     ss.ss_sp = mmap(nullptr, 65536, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     ss.ss_size = 65536;
@@ -137,6 +137,7 @@ static void patchSwitchInstructions(uint32_t* code, size_t count) {
 
 void* loadSwitchElf(const char* elfPath) {
     g_InitArrayFns.clear();
+    g_NnInitStartupPtr = nullptr;
     g_NnMainPtr = nullptr;
 
     FILE* f = fopen(elfPath, "rb");
@@ -249,12 +250,14 @@ void* loadSwitchElf(const char* elfPath) {
             for (size_t s = 0; s < symCount; ++s) {
                 if (syms[s].st_shndx != SHN_UNDEF && syms[s].st_name != 0) {
                     const char* symName = strtab + syms[s].st_name;
-                    if (strcmp(symName, "nnMain") == 0) {
+                    if (strcmp(symName, "nninitStartup") == 0) {
+                        g_NnInitStartupPtr = base + (syms[s].st_value - minVaddr);
+                        writeLog("[ELF] Ditemukan simbol nninitStartup di offset 0x%llx",
+                                 (unsigned long long)(syms[s].st_value - minVaddr));
+                    } else if (strcmp(symName, "nnMain") == 0) {
                         g_NnMainPtr = base + (syms[s].st_value - minVaddr);
                         writeLog("[ELF] Ditemukan simbol nnMain di offset 0x%llx",
                                  (unsigned long long)(syms[s].st_value - minVaddr));
-                    } else if (strcmp(symName, "nninitStartup") == 0 && !g_NnMainPtr) {
-                        g_NnMainPtr = base + (syms[s].st_value - minVaddr);
                     }
                 }
             }
@@ -283,15 +286,24 @@ void* loadSwitchElf(const char* elfPath) {
 void jumpToSwitchEntry(void* entryPoint) {
     using Fn = void (*)();
 
+    if (g_NnInitStartupPtr) {
+        uint64_t startupOff = reinterpret_cast<uint64_t>(g_NnInitStartupPtr) - reinterpret_cast<uint64_t>(g_ElfBase);
+        writeLog("[BOOT] Menjalankan nninitStartup() di %p (Offset ELF: 0x%llx)...",
+                 g_NnInitStartupPtr, (unsigned long long)startupOff);
+        setTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
+        reinterpret_cast<Fn>(g_NnInitStartupPtr)();
+        setTpidrEl0(g_AndroidTls);
+        writeLog("[BOOT] nninitStartup() selesai!");
+    }
+
     if (!g_InitArrayFns.empty()) {
         writeLog("[BOOT] Menjalankan %zu konstruktor global C++ (.init_array)...", g_InitArrayFns.size());
-        alarm(3);
+        alarm(5);
         for (size_t i = 0; i < g_InitArrayFns.size(); ++i) {
             uint64_t ctorOffset = g_InitArrayFns[i] - reinterpret_cast<uint64_t>(g_ElfBase);
             g_CurrentCtorIdx = static_cast<int>(i);
             g_CurrentCtorOffset = ctorOffset;
 
-            writeLog("[CTOR] #%zu (Offset ELF: 0x%llx)", i, (unsigned long long)ctorOffset);
             setTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
             reinterpret_cast<Fn>(g_InitArrayFns[i])();
             setTpidrEl0(g_AndroidTls);
