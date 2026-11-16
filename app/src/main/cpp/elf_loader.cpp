@@ -295,6 +295,7 @@ void jumpToSwitchEntry(void* entryPoint) {
             g_CurrentCtorIdx = static_cast<int>(i);
             g_CurrentCtorOffset = ctorOffset;
 
+            writeLog("[CTOR] #%zu (Offset ELF: 0x%llx)", i, (unsigned long long)ctorOffset);
             setCurrentTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
             reinterpret_cast<Fn>(g_InitArrayFns[i])();
             setCurrentTpidrEl0(g_AndroidTls);

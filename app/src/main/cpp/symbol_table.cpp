@@ -96,19 +96,31 @@ extern "C" void shim_exit(int code) {
     _exit(code);
 }
 
-// Pembungkus aman TLS Bionic untuk fungsi alokator dan format string
 extern "C" void* shim_malloc(size_t size) {
     ScopedAndroidTls tls;
+    if (size >= 1024 * 1024) {
+        writeLog("[ALLOC] malloc(%.2f MB) dari offset 0x%llx",
+                 size / (1024.0 * 1024.0), (unsigned long long)getElfOffsetFromAddr(__builtin_return_address(0)));
+    }
     return malloc(size);
 }
 
 extern "C" void* shim_calloc(size_t nmemb, size_t size) {
     ScopedAndroidTls tls;
+    size_t total = nmemb * size;
+    if (total >= 1024 * 1024) {
+        writeLog("[ALLOC] calloc(%.2f MB) dari offset 0x%llx",
+                 total / (1024.0 * 1024.0), (unsigned long long)getElfOffsetFromAddr(__builtin_return_address(0)));
+    }
     return calloc(nmemb, size);
 }
 
 extern "C" void* shim_realloc(void* ptr, size_t size) {
     ScopedAndroidTls tls;
+    if (size >= 1024 * 1024) {
+        writeLog("[ALLOC] realloc(%.2f MB) dari offset 0x%llx",
+                 size / (1024.0 * 1024.0), (unsigned long long)getElfOffsetFromAddr(__builtin_return_address(0)));
+    }
     return realloc(ptr, size);
 }
 
@@ -119,11 +131,19 @@ extern "C" void shim_free(void* ptr) {
 
 extern "C" int shim_posix_memalign(void** memptr, size_t alignment, size_t size) {
     ScopedAndroidTls tls;
+    if (size >= 1024 * 1024) {
+        writeLog("[ALLOC] posix_memalign(%.2f MB) dari offset 0x%llx",
+                 size / (1024.0 * 1024.0), (unsigned long long)getElfOffsetFromAddr(__builtin_return_address(0)));
+    }
     return posix_memalign(memptr, alignment, size);
 }
 
 extern "C" void* shim_aligned_alloc(size_t alignment, size_t size) {
     ScopedAndroidTls tls;
+    if (size >= 1024 * 1024) {
+        writeLog("[ALLOC] aligned_alloc(%.2f MB) dari offset 0x%llx",
+                 size / (1024.0 * 1024.0), (unsigned long long)getElfOffsetFromAddr(__builtin_return_address(0)));
+    }
     if (alignment < sizeof(void*)) alignment = sizeof(void*);
     void* ptr = nullptr;
     if (posix_memalign(&ptr, alignment, size > 0 ? size : alignment) != 0) return nullptr;
