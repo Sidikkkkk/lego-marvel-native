@@ -1,12 +1,15 @@
 #include <android_native_app_glue.h>
 #include <android/log.h>
 #include <jni.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <string>
 #include "logger.h"
 #include "device_profile.h"
 #include "elf_loader.h"
+
+static ANativeWindow* g_AndroidWindow = nullptr;
 
 static bool hasStoragePermission(JNIEnv* env) {
     jclass versionClass = env->FindClass("android/os/Build$VERSION");
@@ -96,7 +99,27 @@ static void requestStoragePermission(JNIEnv* env, jobject activity) {
     }
 }
 
+static void handleAppCmd(struct android_app* app, int32_t cmd) {
+    if (cmd == APP_CMD_INIT_WINDOW && app->window != nullptr) {
+        g_AndroidWindow = app->window;
+        writeLog("[ANDROID] Surface Window siap (%dx%d)",
+                 ANativeWindow_getWidth(app->window), ANativeWindow_getHeight(app->window));
+    } else if (cmd == APP_CMD_TERM_WINDOW) {
+        g_AndroidWindow = nullptr;
+    }
+}
+
+static void* gameRunnerThread(void* arg) {
+    void* entryPoint = loadSwitchElf("/sdcard/LegoPort/exefs/main.elf");
+    if (entryPoint) {
+        jumpToSwitchEntry(entryPoint);
+    }
+    return nullptr;
+}
+
 void android_main(struct android_app* state) {
+    state->onAppCmd = handleAppCmd;
+
     JNIEnv* env = nullptr;
     state->activity->vm->AttachCurrentThread(&env, nullptr);
 
@@ -108,7 +131,7 @@ void android_main(struct android_app* state) {
     while (state->destroyRequested == 0) {
         int events = 0;
         struct android_poll_source* source = nullptr;
-        ALooper_pollOnce(150, nullptr, &events, reinterpret_cast<void**>(&source));
+        ALooper_pollOnce(50, nullptr, &events, reinterpret_cast<void**>(&source));
         if (source != nullptr) {
             source->process(state, source);
         }
@@ -123,10 +146,13 @@ void android_main(struct android_app* state) {
             detectDeviceProfile();
             installCrashAndSvcHandlers();
 
-            void* entryPoint = loadSwitchElf("/sdcard/LegoPort/exefs/main.elf");
-            if (entryPoint) {
-                jumpToSwitchEntry(entryPoint);
-            }
+            pthread_t gameThread;
+            pthread_attr_t attr;
+            pthread_attr_init(&attr);
+            pthread_attr_setstacksize(&attr, 4 * 1024 * 1024);
+            pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+            pthread_create(&gameThread, &attr, gameRunnerThread, nullptr);
+            pthread_attr_destroy(&attr);
         }
     }
 

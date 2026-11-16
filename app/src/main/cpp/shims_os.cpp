@@ -1,7 +1,9 @@
 #include "logger.h"
 #include "device_profile.h"
 #include "tls_bridge.h"
+#include "elf_loader.h"
 #include <sys/mman.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <sched.h>
 #include <ctime>
@@ -9,6 +11,7 @@
 #include <cstring>
 #include <cstdint>
 #include <cinttypes>
+#include <unordered_map>
 #include <algorithm>
 
 alignas(64) static uint8_t g_DummyMainThread[512] = {0};
@@ -19,6 +22,110 @@ static const char* g_DummyArgv[] = {"LegoMarvel.nss", nullptr};
 static bool g_LoggedHeapReject = false;
 
 extern uint64_t getElfOffsetFromAddr(void* addr);
+
+struct HostMutex {
+    pthread_mutex_t mtx;
+};
+
+struct HostEvent {
+    pthread_mutex_t mtx;
+    pthread_cond_t cond;
+    bool signaled;
+    int clearMode; // 0 = ManualClear, 1 = AutoClear
+};
+
+struct HostSemaphore {
+    pthread_mutex_t mtx;
+    pthread_cond_t cond;
+    int count;
+    int maxCount;
+};
+
+struct HostThread {
+    void* threadHandle;
+    void (*fn)(void*);
+    void* arg;
+    int priority;
+    pthread_t pt;
+    bool started;
+};
+
+static pthread_mutex_t g_SyncMapLock = PTHREAD_MUTEX_INITIALIZER;
+static std::unordered_map<void*, HostMutex*> g_MutexMap;
+static std::unordered_map<void*, HostEvent*> g_EventMap;
+static std::unordered_map<void*, HostSemaphore*> g_SemaMap;
+static std::unordered_map<void*, HostThread*> g_ThreadMap;
+
+static HostMutex* getOrCreateMutex(void* key, bool recursive = true) {
+    pthread_mutex_lock(&g_SyncMapLock);
+    auto it = g_MutexMap.find(key);
+    if (it != g_MutexMap.end()) {
+        pthread_mutex_unlock(&g_SyncMapLock);
+        return it->second;
+    }
+    auto* hm = new HostMutex();
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    if (recursive) {
+        pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    }
+    pthread_mutex_init(&hm->mtx, &attr);
+    pthread_mutexattr_destroy(&attr);
+    g_MutexMap[key] = hm;
+    pthread_mutex_unlock(&g_SyncMapLock);
+    return hm;
+}
+
+static HostEvent* getOrCreateEvent(void* key, bool signaled = false, int clearMode = 1) {
+    pthread_mutex_lock(&g_SyncMapLock);
+    auto it = g_EventMap.find(key);
+    if (it != g_EventMap.end()) {
+        pthread_mutex_unlock(&g_SyncMapLock);
+        return it->second;
+    }
+    auto* he = new HostEvent();
+    pthread_mutex_init(&he->mtx, nullptr);
+    pthread_cond_init(&he->cond, nullptr);
+    he->signaled = signaled;
+    he->clearMode = clearMode;
+    g_EventMap[key] = he;
+    pthread_mutex_unlock(&g_SyncMapLock);
+    return he;
+}
+
+static HostSemaphore* getOrCreateSemaphore(void* key, int initialCount = 0, int maxCount = 1) {
+    pthread_mutex_lock(&g_SyncMapLock);
+    auto it = g_SemaMap.find(key);
+    if (it != g_SemaMap.end()) {
+        pthread_mutex_unlock(&g_SyncMapLock);
+        return it->second;
+    }
+    auto* hs = new HostSemaphore();
+    pthread_mutex_init(&hs->mtx, nullptr);
+    pthread_cond_init(&hs->cond, nullptr);
+    hs->count = initialCount;
+    hs->maxCount = maxCount;
+    g_SemaMap[key] = hs;
+    pthread_mutex_unlock(&g_SyncMapLock);
+    return hs;
+}
+
+static void* switchWorkerThreadEntry(void* rawArg) {
+    auto* ht = reinterpret_cast<HostThread*>(rawArg);
+    uint64_t androidTls = getCurrentTpidrEl0();
+    uint8_t* switchTls = allocateThreadSwitchTls(ht->threadHandle);
+    bindAndroidTlsToSwitchTls(switchTls, androidTls);
+
+    writeLog("[THREAD] Worker aktif: offset 0x%llx (arg=%p)",
+             (unsigned long long)getElfOffsetFromAddr(reinterpret_cast<void*>(ht->fn)), ht->arg);
+
+    setCurrentTpidrEl0(reinterpret_cast<uint64_t>(switchTls));
+    if (ht->fn) {
+        ht->fn(ht->arg);
+    }
+    setCurrentTpidrEl0(androidTls);
+    return nullptr;
+}
 
 extern "C" {
 
@@ -90,51 +197,166 @@ void shim_StandardAllocator_Free(void* thisPtr, void* ptr) {
 }
 
 void shim_nn_os_InitializeMutex(void* mutexPtr, bool recursive, int lockLevel) {
-    if (mutexPtr) memset(mutexPtr, 0, 32);
+    ScopedAndroidTls tls;
+    if (!mutexPtr) return;
+    memset(mutexPtr, 0, 32);
+    getOrCreateMutex(mutexPtr, recursive);
 }
 
-void shim_nn_os_LockMutex(void* mutexPtr) {}
-void shim_nn_os_UnlockMutex(void* mutexPtr) {}
+void shim_nn_os_LockMutex(void* mutexPtr) {
+    ScopedAndroidTls tls;
+    if (!mutexPtr) return;
+    pthread_mutex_lock(&getOrCreateMutex(mutexPtr, true)->mtx);
+}
+
+bool shim_nn_os_TryLockMutex(void* mutexPtr) {
+    ScopedAndroidTls tls;
+    if (!mutexPtr) return true;
+    return pthread_mutex_trylock(&getOrCreateMutex(mutexPtr, true)->mtx) == 0;
+}
+
+void shim_nn_os_UnlockMutex(void* mutexPtr) {
+    ScopedAndroidTls tls;
+    if (!mutexPtr) return;
+    pthread_mutex_unlock(&getOrCreateMutex(mutexPtr, true)->mtx);
+}
+
+void shim_nn_os_FinalizeMutex(void* mutexPtr) {}
 
 void shim_nn_os_InitializeEvent(void* eventPtr, bool signaled, int clearMode) {
-    if (eventPtr) memset(eventPtr, 0, 64);
+    ScopedAndroidTls tls;
+    if (!eventPtr) return;
+    memset(eventPtr, 0, 64);
+    HostEvent* he = getOrCreateEvent(eventPtr, signaled, clearMode);
+    pthread_mutex_lock(&he->mtx);
+    he->signaled = signaled;
+    he->clearMode = clearMode;
+    pthread_mutex_unlock(&he->mtx);
 }
-void shim_nn_os_WaitEvent(void* eventPtr) {}
-void shim_nn_os_SignalEvent(void* eventPtr) {}
-void shim_nn_os_ClearEvent(void* eventPtr) {}
+
+void shim_nn_os_WaitEvent(void* eventPtr) {
+    ScopedAndroidTls tls;
+    if (!eventPtr) return;
+    HostEvent* he = getOrCreateEvent(eventPtr);
+    pthread_mutex_lock(&he->mtx);
+    while (!he->signaled) {
+        pthread_cond_wait(&he->cond, &he->mtx);
+    }
+    if (he->clearMode == 1) {
+        he->signaled = false;
+    }
+    pthread_mutex_unlock(&he->mtx);
+}
+
+void shim_nn_os_SignalEvent(void* eventPtr) {
+    ScopedAndroidTls tls;
+    if (!eventPtr) return;
+    HostEvent* he = getOrCreateEvent(eventPtr);
+    pthread_mutex_lock(&he->mtx);
+    he->signaled = true;
+    pthread_cond_broadcast(&he->cond);
+    pthread_mutex_unlock(&he->mtx);
+}
+
+void shim_nn_os_ClearEvent(void* eventPtr) {
+    ScopedAndroidTls tls;
+    if (!eventPtr) return;
+    HostEvent* he = getOrCreateEvent(eventPtr);
+    pthread_mutex_lock(&he->mtx);
+    he->signaled = false;
+    pthread_mutex_unlock(&he->mtx);
+}
+
 void shim_nn_os_FinalizeEvent(void* eventPtr) {}
 
 void shim_nn_os_InitializeSemaphore(void* semaPtr, int initialCount, int maxCount) {
-    if (semaPtr) memset(semaPtr, 0, 64);
+    ScopedAndroidTls tls;
+    if (!semaPtr) return;
+    memset(semaPtr, 0, 64);
+    HostSemaphore* hs = getOrCreateSemaphore(semaPtr, initialCount, maxCount);
+    pthread_mutex_lock(&hs->mtx);
+    hs->count = initialCount;
+    hs->maxCount = maxCount;
+    pthread_mutex_unlock(&hs->mtx);
 }
-void shim_nn_os_AcquireSemaphore(void* semaPtr) {}
-bool shim_nn_os_TryAcquireSemaphore(void* semaPtr) { return true; }
-void shim_nn_os_ReleaseSemaphore(void* semaPtr, int count) {}
+
+void shim_nn_os_AcquireSemaphore(void* semaPtr) {
+    ScopedAndroidTls tls;
+    if (!semaPtr) return;
+    HostSemaphore* hs = getOrCreateSemaphore(semaPtr);
+    pthread_mutex_lock(&hs->mtx);
+    while (hs->count <= 0) {
+        pthread_cond_wait(&hs->cond, &hs->mtx);
+    }
+    hs->count--;
+    pthread_mutex_unlock(&hs->mtx);
+}
+
+bool shim_nn_os_TryAcquireSemaphore(void* semaPtr) {
+    ScopedAndroidTls tls;
+    if (!semaPtr) return true;
+    HostSemaphore* hs = getOrCreateSemaphore(semaPtr);
+    pthread_mutex_lock(&hs->mtx);
+    bool ok = false;
+    if (hs->count > 0) {
+        hs->count--;
+        ok = true;
+    }
+    pthread_mutex_unlock(&hs->mtx);
+    return ok;
+}
+
+void shim_nn_os_ReleaseSemaphore(void* semaPtr, int count) {
+    ScopedAndroidTls tls;
+    if (!semaPtr) return;
+    HostSemaphore* hs = getOrCreateSemaphore(semaPtr);
+    pthread_mutex_lock(&hs->mtx);
+    hs->count += count;
+    pthread_cond_broadcast(&hs->cond);
+    pthread_mutex_unlock(&hs->mtx);
+}
+
 void shim_nn_os_FinalizeSemaphore(void* semaPtr) {}
 
 uint32_t shim_nn_os_CreateThread(void* thread, void* fn, void* arg, void* stack, size_t stackSize, int priority) {
     ScopedAndroidTls tls;
     if (thread) memset(thread, 0, 256);
+    auto* ht = new HostThread{thread, reinterpret_cast<void (*)(void*)>(fn), arg, priority, 0, false};
+    pthread_mutex_lock(&g_SyncMapLock);
+    g_ThreadMap[thread] = ht;
+    pthread_mutex_unlock(&g_SyncMapLock);
+
     writeLog("[OS] nn::os::CreateThread(fn=0x%llx, stack=%zu KB, prio=%d)",
              (unsigned long long)getElfOffsetFromAddr(fn), stackSize / 1024, priority);
     return 0;
 }
 
 uint32_t shim_nn_os_CreateThreadCore(void* thread, void* fn, void* arg, void* stack, size_t stackSize, int priority, int core) {
-    ScopedAndroidTls tls;
-    if (thread) memset(thread, 0, 256);
-    writeLog("[OS] nn::os::CreateThreadCore(fn=0x%llx, core=%d, prio=%d)",
-             (unsigned long long)getElfOffsetFromAddr(fn), core, priority);
-    return 0;
+    return shim_nn_os_CreateThread(thread, fn, arg, stack, stackSize, priority);
 }
 
 void shim_nn_os_StartThread(void* thread) {
     ScopedAndroidTls tls;
+    pthread_mutex_lock(&g_SyncMapLock);
+    auto it = g_ThreadMap.find(thread);
+    HostThread* ht = (it != g_ThreadMap.end()) ? it->second : nullptr;
+    pthread_mutex_unlock(&g_SyncMapLock);
+
+    if (ht && !ht->started) {
+        ht->started = true;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 2 * 1024 * 1024);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        pthread_create(&ht->pt, &attr, switchWorkerThreadEntry, ht);
+        pthread_attr_destroy(&attr);
+    }
     writeLog("[OS] nn::os::StartThread(%p)", thread);
 }
 
 void* shim_nn_os_GetCurrentThread() {
-    return g_DummyMainThread;
+    void* h = getThreadSwitchHandle();
+    return h ? h : g_DummyMainThread;
 }
 
 int shim_nn_os_GetHostArgc() {
@@ -178,7 +400,6 @@ uint32_t shim_nn_time_GetCurrentTime(int64_t* outPosixTime) {
     return 0;
 }
 
-// Display & Window (nn::vi)
 void shim_nn_vi_Initialize() {
     ScopedAndroidTls tls;
     writeLog("[VI] nn::vi::Initialize()");
@@ -205,21 +426,21 @@ uint32_t shim_nn_vi_GetNativeWindow(void** outWindow, void* layer) {
     return 0;
 }
 
-// Operating Environment & Language (nn::oe / nn::settings)
 int shim_nn_oe_GetOperationMode() {
-    return 0; // Handheld mode (720p)
+    return 0;
 }
 
 int shim_nn_oe_GetPerformanceMode() {
-    return 0; // Normal
+    return 0;
 }
 
 int shim_nn_oe_GetCurrentFocusState() {
-    return 1; // FocusState_InFocus
+    return 1;
 }
 
 uint32_t shim_nn_oe_PopNotificationMessage() {
-    return 0; // Tidak ada pesan sistem
+    usleep(16000); // Cegah HandleMessageAutoLoop busy-spin 100% CPU
+    return 0;
 }
 
 uint64_t shim_nn_oe_GetDesiredLanguage() {
@@ -234,7 +455,6 @@ uint64_t shim_nn_settings_LanguageCode_Make(int language) {
     return code;
 }
 
-// User Account (nn::account)
 void shim_nn_account_Initialize() {
     ScopedAndroidTls tls;
     writeLog("[ACCOUNT] nn::account::Initialize()");
@@ -259,14 +479,13 @@ uint32_t shim_nn_account_GetUserId(void* outUid, const void* userHandle) {
     return 0;
 }
 
-// Input / HID (nn::hid)
 void shim_nn_hid_InitializeNpad() {
     ScopedAndroidTls tls;
     writeLog("[HID] nn::hid::InitializeNpad()");
 }
 
 uint32_t shim_nn_hid_GetNpadStyleSet(const uint32_t* npadId) {
-    return 0x2; // NpadStyleHandheld
+    return 0x2;
 }
 
 void shim_nn_fs_SetAllocator(void* allocFn, void* deallocFn) {

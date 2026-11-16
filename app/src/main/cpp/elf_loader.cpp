@@ -15,7 +15,8 @@
 #include <algorithm>
 
 static uint8_t* g_ElfBase = nullptr;
-static uint8_t* g_SwitchTls = nullptr;
+static std::vector<uint8_t> g_TlsTemplate;
+static size_t g_TlsMemSz = 0;
 static std::vector<uint64_t> g_InitArrayFns;
 static void* g_NnInitStartupPtr = nullptr;
 static void* g_NnMainPtr = nullptr;
@@ -23,15 +24,29 @@ static void* g_NnMainPtr = nullptr;
 static volatile int g_CurrentCtorIdx = -1;
 static volatile uint64_t g_CurrentCtorOffset = 0;
 
+extern "C" void* shim_nn_os_GetCurrentThread();
+
 uint64_t getElfOffsetFromAddr(void* addr) {
     uintptr_t p = reinterpret_cast<uintptr_t>(addr);
     uintptr_t b = reinterpret_cast<uintptr_t>(g_ElfBase);
     return (g_ElfBase && p >= b) ? (p - b) : 0;
 }
 
+uint8_t* allocateThreadSwitchTls(void* threadHandle) {
+    return createSwitchTlsBlock(
+        g_TlsTemplate.empty() ? nullptr : g_TlsTemplate.data(),
+        g_TlsTemplate.size(),
+        g_TlsMemSz,
+        threadHandle
+    );
+}
+
 static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
     uint64_t currentTls = getCurrentTpidrEl0();
-    if (g_AndroidTls != 0) setCurrentTpidrEl0(g_AndroidTls);
+    uint64_t androidTls = getThreadAndroidTls();
+    if (androidTls != 0 && androidTls != currentTls) {
+        setCurrentTpidrEl0(androidTls);
+    }
 
     auto* uc = reinterpret_cast<ucontext_t*>(ucontext);
     uint64_t pc = uc->uc_mcontext.pc;
@@ -54,19 +69,6 @@ static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
         }
     }
 
-    if (sig == SIGALRM) {
-        writeLog("[TIMEOUT] Hang > 5 detik di .init_array ctor #%d (Offset ELF ctor: 0x%llx) | PC=0x%llx (Offset: 0x%llx)",
-                 g_CurrentCtorIdx, (unsigned long long)g_CurrentCtorOffset,
-                 (unsigned long long)pc, (unsigned long long)offset);
-        writeLog("[TIMEOUT] x0=0x%llx x1=0x%llx LR(x30)=0x%llx (Offset LR: 0x%llx)",
-                 (unsigned long long)uc->uc_mcontext.regs[0],
-                 (unsigned long long)uc->uc_mcontext.regs[1],
-                 (unsigned long long)uc->uc_mcontext.regs[30],
-                 (unsigned long long)getElfOffsetFromAddr(reinterpret_cast<void*>(uc->uc_mcontext.regs[30])));
-        closeLogger();
-        _exit(1);
-    }
-
     writeLog("[CRASH] Signal %d (%s) di PC=0x%llx (Offset ELF: 0x%llx) | Fault Addr=%p | Ctor #%d",
              sig, strsignal(sig), (unsigned long long)pc, (unsigned long long)offset,
              info->si_addr, g_CurrentCtorIdx);
@@ -82,8 +84,6 @@ static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
 }
 
 void installCrashAndSvcHandlers() {
-    g_AndroidTls = getCurrentTpidrEl0();
-
     stack_t ss{};
     ss.ss_sp = mmap(nullptr, 65536, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     ss.ss_size = 65536;
@@ -102,7 +102,6 @@ void installCrashAndSvcHandlers() {
     sigaction(SIGILL,  &sa, nullptr);
     sigaction(SIGBUS,  &sa, nullptr);
     sigaction(SIGABRT, &sa, nullptr);
-    sigaction(SIGALRM, &sa, nullptr);
 }
 
 static void patchSwitchInstructions(uint32_t* code, size_t count) {
@@ -128,6 +127,8 @@ static void patchSwitchInstructions(uint32_t* code, size_t count) {
 
 void* loadSwitchElf(const char* elfPath) {
     g_InitArrayFns.clear();
+    g_TlsTemplate.clear();
+    g_TlsMemSz = 0;
     g_NnInitStartupPtr = nullptr;
     g_NnMainPtr = nullptr;
 
@@ -153,8 +154,6 @@ void* loadSwitchElf(const char* elfPath) {
 
     auto* phdrs = reinterpret_cast<Elf64_Phdr*>(buf.data() + ehdr->e_phoff);
     uint64_t minVaddr = UINT64_MAX, maxVaddr = 0;
-    size_t tlsFileSz = 0, tlsMemSz = 0;
-    uint64_t tlsOffset = 0;
 
     for (int i = 0; i < ehdr->e_phnum; ++i) {
         if (phdrs[i].p_type == PT_LOAD) {
@@ -162,20 +161,12 @@ void* loadSwitchElf(const char* elfPath) {
             if (phdrs[i].p_vaddr + phdrs[i].p_memsz > maxVaddr)
                 maxVaddr = phdrs[i].p_vaddr + phdrs[i].p_memsz;
         } else if (phdrs[i].p_type == PT_TLS) {
-            tlsOffset = phdrs[i].p_offset;
-            tlsFileSz = phdrs[i].p_filesz;
-            tlsMemSz  = phdrs[i].p_memsz;
+            g_TlsMemSz = phdrs[i].p_memsz;
+            if (phdrs[i].p_filesz > 0) {
+                g_TlsTemplate.assign(buf.data() + phdrs[i].p_offset,
+                                     buf.data() + phdrs[i].p_offset + phdrs[i].p_filesz);
+            }
         }
-    }
-
-    size_t totalTlsAlloc = std::max<size_t>(65536, tlsMemSz + 4096);
-    g_SwitchTls = reinterpret_cast<uint8_t*>(
-        mmap(nullptr, totalTlsAlloc, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
-    );
-    memset(g_SwitchTls, 0, totalTlsAlloc);
-    *reinterpret_cast<uint64_t*>(g_SwitchTls + 0x1F8) = reinterpret_cast<uint64_t>(g_SwitchTls + 0x200);
-    if (tlsFileSz > 0) {
-        memcpy(g_SwitchTls + 0x200, buf.data() + tlsOffset, tlsFileSz);
     }
 
     size_t totalMem = maxVaddr - minVaddr;
@@ -277,30 +268,31 @@ void* loadSwitchElf(const char* elfPath) {
 void jumpToSwitchEntry(void* entryPoint) {
     using Fn = void (*)();
 
+    uint64_t threadAndroidTls = getCurrentTpidrEl0();
+    uint8_t* mainSwitchTls = allocateThreadSwitchTls(shim_nn_os_GetCurrentThread());
+    bindAndroidTlsToSwitchTls(mainSwitchTls, threadAndroidTls);
+
     if (g_NnInitStartupPtr) {
         uint64_t startupOff = reinterpret_cast<uint64_t>(g_NnInitStartupPtr) - reinterpret_cast<uint64_t>(g_ElfBase);
         writeLog("[BOOT] Menjalankan nninitStartup() di %p (Offset ELF: 0x%llx)...",
                  g_NnInitStartupPtr, (unsigned long long)startupOff);
-        setCurrentTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
+        setCurrentTpidrEl0(reinterpret_cast<uint64_t>(mainSwitchTls));
         reinterpret_cast<Fn>(g_NnInitStartupPtr)();
-        setCurrentTpidrEl0(g_AndroidTls);
+        setCurrentTpidrEl0(threadAndroidTls);
         writeLog("[BOOT] nninitStartup() selesai!");
     }
 
     if (!g_InitArrayFns.empty()) {
         writeLog("[BOOT] Menjalankan %zu konstruktor global C++ (.init_array)...", g_InitArrayFns.size());
-        alarm(5);
         for (size_t i = 0; i < g_InitArrayFns.size(); ++i) {
             uint64_t ctorOffset = g_InitArrayFns[i] - reinterpret_cast<uint64_t>(g_ElfBase);
             g_CurrentCtorIdx = static_cast<int>(i);
             g_CurrentCtorOffset = ctorOffset;
 
-            writeLog("[CTOR] #%zu (Offset ELF: 0x%llx)", i, (unsigned long long)ctorOffset);
-            setCurrentTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
+            setCurrentTpidrEl0(reinterpret_cast<uint64_t>(mainSwitchTls));
             reinterpret_cast<Fn>(g_InitArrayFns[i])();
-            setCurrentTpidrEl0(g_AndroidTls);
+            setCurrentTpidrEl0(threadAndroidTls);
         }
-        alarm(0);
         g_CurrentCtorIdx = -1;
         writeLog("[BOOT] Semua %zu konstruktor .init_array selesai!", g_InitArrayFns.size());
     }
@@ -309,8 +301,8 @@ void jumpToSwitchEntry(void* entryPoint) {
     writeLog("[BOOT] Memanggil nnMain() di %p (Offset ELF: 0x%llx)...",
              entryPoint, (unsigned long long)offset);
 
-    setCurrentTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
+    setCurrentTpidrEl0(reinterpret_cast<uint64_t>(mainSwitchTls));
     reinterpret_cast<Fn>(entryPoint)();
-    setCurrentTpidrEl0(g_AndroidTls);
+    setCurrentTpidrEl0(threadAndroidTls);
     writeLog("[BOOT] nnMain() selesai dieksekusi.");
 }
