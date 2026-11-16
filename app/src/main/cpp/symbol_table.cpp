@@ -25,9 +25,26 @@ extern "C" {
     void shim_nn_os_InitializeMutex(void* mutexPtr, bool recursive, int lockLevel);
     void shim_nn_os_LockMutex(void* mutexPtr);
     void shim_nn_os_UnlockMutex(void* mutexPtr);
+    void shim_nn_os_InitializeEvent(void* eventPtr, bool signaled, int clearMode);
+    void shim_nn_os_WaitEvent(void* eventPtr);
+    void shim_nn_os_SignalEvent(void* eventPtr);
+    void shim_nn_os_ClearEvent(void* eventPtr);
+    void shim_nn_os_FinalizeEvent(void* eventPtr);
+    void shim_nn_os_InitializeSemaphore(void* semaPtr, int initialCount, int maxCount);
+    void shim_nn_os_AcquireSemaphore(void* semaPtr);
+    bool shim_nn_os_TryAcquireSemaphore(void* semaPtr);
+    void shim_nn_os_ReleaseSemaphore(void* semaPtr, int count);
+    void shim_nn_os_FinalizeSemaphore(void* semaPtr);
     void* shim_nn_os_GetCurrentThread();
+    int shim_nn_os_GetHostArgc();
+    const char** shim_nn_os_GetHostArgv();
+    void shim_nn_os_SleepThread(int64_t nanoSeconds);
+    void shim_nn_os_YieldThread();
     int64_t shim_nn_os_GetSystemTick();
     int64_t shim_nn_os_GetSystemTickFrequency();
+    void shim_nn_fs_SetAllocator(void* allocFn, void* deallocFn);
+    void shim_nv_SetGraphicsAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData);
+    void shim_movie_SetAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData);
     uint32_t shim_nn_fs_MountRom(const char* name, void* cacheBuffer, uint64_t cacheSize);
     void* shim_nvnBootstrapLoader(const char* procName);
 }
@@ -72,7 +89,6 @@ extern "C" void shim_exit(int code) {
     _exit(code);
 }
 
-// Implementasi ABI libc++ std::__1::basic_string<char>::assign(const char*, size_t)
 extern "C" void* shim_libcxx_string_assign(void* thisPtr, const char* s, size_t len) {
     if (!thisPtr) return nullptr;
     auto* bytes = reinterpret_cast<uint8_t*>(thisPtr);
@@ -113,9 +129,26 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"_ZN2nn2os15InitializeMutexEPNS0_9MutexTypeEbi", reinterpret_cast<void*>(&shim_nn_os_InitializeMutex)},
     {"_ZN2nn2os9LockMutexEPNS0_9MutexTypeE", reinterpret_cast<void*>(&shim_nn_os_LockMutex)},
     {"_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE", reinterpret_cast<void*>(&shim_nn_os_UnlockMutex)},
+    {"_ZN2nn2os15InitializeEventEPNS0_9EventTypeEbNS0_14EventClearModeE", reinterpret_cast<void*>(&shim_nn_os_InitializeEvent)},
+    {"_ZN2nn2os9WaitEventEPNS0_9EventTypeE", reinterpret_cast<void*>(&shim_nn_os_WaitEvent)},
+    {"_ZN2nn2os11SignalEventEPNS0_9EventTypeE", reinterpret_cast<void*>(&shim_nn_os_SignalEvent)},
+    {"_ZN2nn2os10ClearEventEPNS0_9EventTypeE", reinterpret_cast<void*>(&shim_nn_os_ClearEvent)},
+    {"_ZN2nn2os13FinalizeEventEPNS0_9EventTypeE", reinterpret_cast<void*>(&shim_nn_os_FinalizeEvent)},
+    {"_ZN2nn2os19InitializeSemaphoreEPNS0_13SemaphoreTypeEii", reinterpret_cast<void*>(&shim_nn_os_InitializeSemaphore)},
+    {"_ZN2nn2os16AcquireSemaphoreEPNS0_13SemaphoreTypeE", reinterpret_cast<void*>(&shim_nn_os_AcquireSemaphore)},
+    {"_ZN2nn2os19TryAcquireSemaphoreEPNS0_13SemaphoreTypeE", reinterpret_cast<void*>(&shim_nn_os_TryAcquireSemaphore)},
+    {"_ZN2nn2os16ReleaseSemaphoreEPNS0_13SemaphoreTypeEi", reinterpret_cast<void*>(&shim_nn_os_ReleaseSemaphore)},
+    {"_ZN2nn2os17FinalizeSemaphoreEPNS0_13SemaphoreTypeE", reinterpret_cast<void*>(&shim_nn_os_FinalizeSemaphore)},
     {"_ZN2nn2os16GetCurrentThreadEv", reinterpret_cast<void*>(&shim_nn_os_GetCurrentThread)},
+    {"_ZN2nn2os11GetHostArgcEv", reinterpret_cast<void*>(&shim_nn_os_GetHostArgc)},
+    {"_ZN2nn2os11GetHostArgvEv", reinterpret_cast<void*>(&shim_nn_os_GetHostArgv)},
+    {"_ZN2nn2os11SleepThreadENS_8TimeSpanE", reinterpret_cast<void*>(&shim_nn_os_SleepThread)},
+    {"_ZN2nn2os11YieldThreadEv", reinterpret_cast<void*>(&shim_nn_os_YieldThread)},
     {"_ZN2nn2os13GetSystemTickEv", reinterpret_cast<void*>(&shim_nn_os_GetSystemTick)},
     {"_ZN2nn2os22GetSystemTickFrequencyEv", reinterpret_cast<void*>(&shim_nn_os_GetSystemTickFrequency)},
+    {"_ZN2nn2fs12SetAllocatorEPFPvmEPFvS1_mE", reinterpret_cast<void*>(&shim_nn_fs_SetAllocator)},
+    {"_ZN2nv20SetGraphicsAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", reinterpret_cast<void*>(&shim_nv_SetGraphicsAllocator)},
+    {"_ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", reinterpret_cast<void*>(&shim_movie_SetAllocator)},
     {"_ZN2nn2fs8MountRomEPKcPvm", reinterpret_cast<void*>(&shim_nn_fs_MountRom)},
     {"_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignEPKcm", reinterpret_cast<void*>(&shim_libcxx_string_assign)},
     {"nvnBootstrapLoader", reinterpret_cast<void*>(&shim_nvnBootstrapLoader)},
@@ -126,6 +159,7 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"abort", reinterpret_cast<void*>(&shim_abort)},
     {"exit", reinterpret_cast<void*>(&shim_exit)},
     {"_exit", reinterpret_cast<void*>(&shim_exit)},
+    {"_Exit", reinterpret_cast<void*>(&shim_exit)},
 };
 
 static std::unordered_set<std::string> g_LoggedMissing;

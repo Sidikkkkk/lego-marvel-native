@@ -1,6 +1,8 @@
 #include "logger.h"
 #include "device_profile.h"
 #include <sys/mman.h>
+#include <unistd.h>
+#include <sched.h>
 #include <ctime>
 #include <cstdlib>
 #include <cstring>
@@ -9,6 +11,7 @@
 #include <algorithm>
 
 alignas(64) static uint8_t g_DummyMainThread[512] = {0};
+static const char* g_DummyArgv[] = {"LegoMarvel.nss", nullptr};
 
 extern "C" {
 
@@ -69,8 +72,43 @@ void shim_nn_os_InitializeMutex(void* mutexPtr, bool recursive, int lockLevel) {
 void shim_nn_os_LockMutex(void* mutexPtr) {}
 void shim_nn_os_UnlockMutex(void* mutexPtr) {}
 
+void shim_nn_os_InitializeEvent(void* eventPtr, bool signaled, int clearMode) {
+    if (eventPtr) memset(eventPtr, 0, 64);
+}
+void shim_nn_os_WaitEvent(void* eventPtr) {}
+void shim_nn_os_SignalEvent(void* eventPtr) {}
+void shim_nn_os_ClearEvent(void* eventPtr) {}
+void shim_nn_os_FinalizeEvent(void* eventPtr) {}
+
+void shim_nn_os_InitializeSemaphore(void* semaPtr, int initialCount, int maxCount) {
+    if (semaPtr) memset(semaPtr, 0, 64);
+}
+void shim_nn_os_AcquireSemaphore(void* semaPtr) {}
+bool shim_nn_os_TryAcquireSemaphore(void* semaPtr) { return true; }
+void shim_nn_os_ReleaseSemaphore(void* semaPtr, int count) {}
+void shim_nn_os_FinalizeSemaphore(void* semaPtr) {}
+
 void* shim_nn_os_GetCurrentThread() {
     return g_DummyMainThread;
+}
+
+int shim_nn_os_GetHostArgc() {
+    return 1;
+}
+
+const char** shim_nn_os_GetHostArgv() {
+    return g_DummyArgv;
+}
+
+void shim_nn_os_SleepThread(int64_t nanoSeconds) {
+    if (nanoSeconds > 0) {
+        useconds_t us = static_cast<useconds_t>(std::min<int64_t>(nanoSeconds / 1000, 16000));
+        if (us > 0) usleep(us);
+    }
+}
+
+void shim_nn_os_YieldThread() {
+    sched_yield();
 }
 
 int64_t shim_nn_os_GetSystemTick() {
@@ -82,6 +120,18 @@ int64_t shim_nn_os_GetSystemTick() {
 
 int64_t shim_nn_os_GetSystemTickFrequency() {
     return 19200000LL;
+}
+
+void shim_nn_fs_SetAllocator(void* allocFn, void* deallocFn) {
+    writeLog("[FS] nn::fs::SetAllocator dipanggil");
+}
+
+void shim_nv_SetGraphicsAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData) {
+    writeLog("[NV] nv::SetGraphicsAllocator dipanggil");
+}
+
+void shim_movie_SetAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData) {
+    writeLog("[MOVIE] movie::SetAllocator dipanggil");
 }
 
 }

@@ -7,6 +7,7 @@
 #include <elf.h>
 #include <unistd.h>
 #include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -78,10 +79,11 @@ static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
     writeLog("[CRASH] Signal %d (%s) di PC=0x%llx (Offset ELF: 0x%llx) | Fault Addr=%p | Ctor #%d",
              sig, strsignal(sig), (unsigned long long)pc, (unsigned long long)offset,
              info->si_addr, g_CurrentCtorIdx);
-    writeLog("[CRASH] x0=0x%llx x1=0x%llx x2=0x%llx LR(x30)=0x%llx",
+    writeLog("[CRASH] x0=0x%llx x1=0x%llx x2=0x%llx SP=0x%llx LR(x30)=0x%llx",
              (unsigned long long)uc->uc_mcontext.regs[0],
              (unsigned long long)uc->uc_mcontext.regs[1],
              (unsigned long long)uc->uc_mcontext.regs[2],
+             (unsigned long long)uc->uc_mcontext.sp,
              (unsigned long long)uc->uc_mcontext.regs[30]);
     closeLogger();
     _exit(1);
@@ -90,9 +92,18 @@ static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
 void installCrashAndSvcHandlers() {
     g_AndroidTls = getTpidrEl0();
 
+    // Siapkan alternate stack 64 KB agar crash akibat stack overflow/corrupt tetap tertangkap
+    stack_t ss{};
+    ss.ss_sp = mmap(nullptr, 65536, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    ss.ss_size = 65536;
+    ss.ss_flags = 0;
+    if (ss.ss_sp != MAP_FAILED) {
+        sigaltstack(&ss, nullptr);
+    }
+
     struct sigaction sa{};
     sa.sa_sigaction = nativeSignalHandler;
-    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
     sigemptyset(&sa.sa_mask);
 
     sigaction(SIGTRAP, &sa, nullptr);
@@ -165,7 +176,6 @@ void* loadSwitchElf(const char* elfPath) {
         }
     }
 
-    // Siapkan 64 KB + PT_TLS untuk Switch ThreadLocalRegion & C++ thread_local
     size_t totalTlsAlloc = std::max<size_t>(65536, tlsMemSz + 4096);
     g_SwitchTls = reinterpret_cast<uint8_t*>(
         mmap(nullptr, totalTlsAlloc, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
@@ -175,7 +185,6 @@ void* loadSwitchElf(const char* elfPath) {
     if (tlsFileSz > 0) {
         memcpy(g_SwitchTls + 0x200, buf.data() + tlsOffset, tlsFileSz);
     }
-    writeLog("[TLS] Alokasi Switch TLS: %zu bytes (PT_TLS memsz=%zu)", totalTlsAlloc, tlsMemSz);
 
     size_t totalMem = maxVaddr - minVaddr;
     writeLog("[ELF] Alokasi memori kode game: %.2f MB", totalMem / (1024.0 * 1024.0));
@@ -246,8 +255,6 @@ void* loadSwitchElf(const char* elfPath) {
                                  (unsigned long long)(syms[s].st_value - minVaddr));
                     } else if (strcmp(symName, "nninitStartup") == 0 && !g_NnMainPtr) {
                         g_NnMainPtr = base + (syms[s].st_value - minVaddr);
-                        writeLog("[ELF] Ditemukan simbol nninitStartup di offset 0x%llx",
-                                 (unsigned long long)(syms[s].st_value - minVaddr));
                     }
                 }
             }
@@ -279,13 +286,16 @@ void jumpToSwitchEntry(void* entryPoint) {
     if (!g_InitArrayFns.empty()) {
         writeLog("[BOOT] Menjalankan %zu konstruktor global C++ (.init_array)...", g_InitArrayFns.size());
         alarm(3);
-        setTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
         for (size_t i = 0; i < g_InitArrayFns.size(); ++i) {
+            uint64_t ctorOffset = g_InitArrayFns[i] - reinterpret_cast<uint64_t>(g_ElfBase);
             g_CurrentCtorIdx = static_cast<int>(i);
-            g_CurrentCtorOffset = g_InitArrayFns[i] - reinterpret_cast<uint64_t>(g_ElfBase);
+            g_CurrentCtorOffset = ctorOffset;
+
+            writeLog("[CTOR] #%zu (Offset ELF: 0x%llx)", i, (unsigned long long)ctorOffset);
+            setTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
             reinterpret_cast<Fn>(g_InitArrayFns[i])();
+            setTpidrEl0(g_AndroidTls);
         }
-        setTpidrEl0(g_AndroidTls);
         alarm(0);
         g_CurrentCtorIdx = -1;
         writeLog("[BOOT] Semua %zu konstruktor .init_array selesai!", g_InitArrayFns.size());
