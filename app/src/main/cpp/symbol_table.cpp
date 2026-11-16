@@ -1,8 +1,11 @@
 #include "symbol_table.h"
+#include "tls_bridge.h"
 #include "logger.h"
 #include <dlfcn.h>
 #include <unistd.h>
 #include <cerrno>
+#include <cstdio>
+#include <cstdarg>
 #include <cstring>
 #include <cstdlib>
 #include <unordered_map>
@@ -54,6 +57,7 @@ extern "C" uint32_t shim_default_stub() {
 }
 
 extern "C" void shim_cxa_pure_virtual() {
+    ScopedAndroidTls tls;
     writeLog("[WARN] __cxa_pure_virtual dipanggil dari offset 0x%llx",
              (unsigned long long)getElfOffsetFromAddr(__builtin_return_address(0)));
 }
@@ -70,10 +74,12 @@ extern "C" void shim_cxa_guard_release(uint64_t* guard) {
 }
 
 extern "C" int* shim_errno_location() {
+    ScopedAndroidTls tls;
     return &errno;
 }
 
 extern "C" void shim_abort() {
+    ScopedAndroidTls tls;
     void* caller = __builtin_return_address(0);
     writeLog("[ABORT] Game memanggil abort() dari %p (Offset ELF: 0x%llx)",
              caller, (unsigned long long)getElfOffsetFromAddr(caller));
@@ -82,6 +88,7 @@ extern "C" void shim_abort() {
 }
 
 extern "C" void shim_exit(int code) {
+    ScopedAndroidTls tls;
     void* caller = __builtin_return_address(0);
     writeLog("[EXIT] Game memanggil exit(%d) dari %p (Offset ELF: 0x%llx)",
              code, caller, (unsigned long long)getElfOffsetFromAddr(caller));
@@ -89,7 +96,84 @@ extern "C" void shim_exit(int code) {
     _exit(code);
 }
 
+// Pembungkus aman TLS Bionic untuk fungsi alokator dan format string
+extern "C" void* shim_malloc(size_t size) {
+    ScopedAndroidTls tls;
+    return malloc(size);
+}
+
+extern "C" void* shim_calloc(size_t nmemb, size_t size) {
+    ScopedAndroidTls tls;
+    return calloc(nmemb, size);
+}
+
+extern "C" void* shim_realloc(void* ptr, size_t size) {
+    ScopedAndroidTls tls;
+    return realloc(ptr, size);
+}
+
+extern "C" void shim_free(void* ptr) {
+    ScopedAndroidTls tls;
+    free(ptr);
+}
+
+extern "C" int shim_posix_memalign(void** memptr, size_t alignment, size_t size) {
+    ScopedAndroidTls tls;
+    return posix_memalign(memptr, alignment, size);
+}
+
+extern "C" void* shim_aligned_alloc(size_t alignment, size_t size) {
+    ScopedAndroidTls tls;
+    if (alignment < sizeof(void*)) alignment = sizeof(void*);
+    void* ptr = nullptr;
+    if (posix_memalign(&ptr, alignment, size > 0 ? size : alignment) != 0) return nullptr;
+    return ptr;
+}
+
+extern "C" int shim_vsnprintf(char* str, size_t size, const char* format, va_list ap) {
+    ScopedAndroidTls tls;
+    return vsnprintf(str, size, format, ap);
+}
+
+extern "C" int shim_snprintf(char* str, size_t size, const char* format, ...) {
+    ScopedAndroidTls tls;
+    va_list ap;
+    va_start(ap, format);
+    int ret = vsnprintf(str, size, format, ap);
+    va_end(ap);
+    return ret;
+}
+
+extern "C" int shim_vsprintf(char* str, const char* format, va_list ap) {
+    ScopedAndroidTls tls;
+    return vsprintf(str, format, ap);
+}
+
+extern "C" int shim_sprintf(char* str, const char* format, ...) {
+    ScopedAndroidTls tls;
+    va_list ap;
+    va_start(ap, format);
+    int ret = vsprintf(str, format, ap);
+    va_end(ap);
+    return ret;
+}
+
+extern "C" int shim_sscanf(const char* str, const char* format, ...) {
+    ScopedAndroidTls tls;
+    va_list ap;
+    va_start(ap, format);
+    int ret = vsscanf(str, format, ap);
+    va_end(ap);
+    return ret;
+}
+
+extern "C" double shim_strtod(const char* nptr, char** endptr) {
+    ScopedAndroidTls tls;
+    return strtod(nptr, endptr);
+}
+
 extern "C" void* shim_libcxx_string_assign(void* thisPtr, const char* s, size_t len) {
+    ScopedAndroidTls tls;
     if (!thisPtr) return nullptr;
     auto* bytes = reinterpret_cast<uint8_t*>(thisPtr);
     auto* words = reinterpret_cast<uint64_t*>(thisPtr);
@@ -160,6 +244,18 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"exit", reinterpret_cast<void*>(&shim_exit)},
     {"_exit", reinterpret_cast<void*>(&shim_exit)},
     {"_Exit", reinterpret_cast<void*>(&shim_exit)},
+    {"malloc", reinterpret_cast<void*>(&shim_malloc)},
+    {"calloc", reinterpret_cast<void*>(&shim_calloc)},
+    {"realloc", reinterpret_cast<void*>(&shim_realloc)},
+    {"free", reinterpret_cast<void*>(&shim_free)},
+    {"posix_memalign", reinterpret_cast<void*>(&shim_posix_memalign)},
+    {"aligned_alloc", reinterpret_cast<void*>(&shim_aligned_alloc)},
+    {"snprintf", reinterpret_cast<void*>(&shim_snprintf)},
+    {"vsnprintf", reinterpret_cast<void*>(&shim_vsnprintf)},
+    {"sprintf", reinterpret_cast<void*>(&shim_sprintf)},
+    {"vsprintf", reinterpret_cast<void*>(&shim_vsprintf)},
+    {"sscanf", reinterpret_cast<void*>(&shim_sscanf)},
+    {"strtod", reinterpret_cast<void*>(&shim_strtod)},
 };
 
 static std::unordered_set<std::string> g_LoggedMissing;

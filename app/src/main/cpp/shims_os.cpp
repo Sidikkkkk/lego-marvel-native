@@ -1,5 +1,6 @@
 #include "logger.h"
 #include "device_profile.h"
+#include "tls_bridge.h"
 #include <sys/mman.h>
 #include <unistd.h>
 #include <sched.h>
@@ -17,19 +18,21 @@ static bool g_LoggedHeapReject = false;
 extern "C" {
 
 void shim_nn_init_Start() {
+    ScopedAndroidTls tls;
     writeLog("[OS] nn::init::Start() dipanggil");
 }
 
 uint32_t shim_nn_os_SetMemoryHeapSize(uint64_t requestedSize) {
+    ScopedAndroidTls tls;
     uint64_t requestedMB = requestedSize / (1024 * 1024);
     uint64_t limitBytes = g_Device.safeHeapLimitMB * 1024ULL * 1024ULL;
 
     if (requestedSize > limitBytes) {
         if (!g_LoggedHeapReject) {
             g_LoggedHeapReject = true;
-            writeLog("[OS] nn::os::SetMemoryHeapSize(%" PRIu64 " MB) ditolak -> memaksa mode retail minimum", requestedMB);
+            writeLog("[OS] nn::os::SetMemoryHeapSize(%" PRIu64 " MB) ditolak -> menurunkan ke mode retail", requestedMB);
         }
-        return 0x202; // ResultOutOfMemory agar nninitStartup menurunkan ukuran ke batas retail
+        return 0x202;
     }
 
     writeLog("[OS] nn::os::SetMemoryHeapSize(diminta=%" PRIu64 " MB) -> OK", requestedMB);
@@ -37,6 +40,7 @@ uint32_t shim_nn_os_SetMemoryHeapSize(uint64_t requestedSize) {
 }
 
 uint32_t shim_nn_os_AllocateMemoryBlock(uintptr_t* outAddress, size_t size) {
+    ScopedAndroidTls tls;
     void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE,
                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (ptr == MAP_FAILED) {
@@ -53,14 +57,17 @@ void shim_StandardAllocator_ctor(void* thisPtr) {
 }
 
 void shim_StandardAllocator_Init(void* thisPtr, void* addr, size_t size, bool isCacheEnable) {
-    writeLog("[MEM] StandardAllocator::Initialize(addr=%p, size=%zu)", addr, size);
+    ScopedAndroidTls tls;
+    writeLog("[MEM] StandardAllocator::Initialize(addr=%p, size=%zu MB)", addr, size / (1024 * 1024));
 }
 
 void* shim_StandardAllocator_Alloc(void* thisPtr, size_t size) {
+    ScopedAndroidTls tls;
     return malloc(size > 0 ? size : 16);
 }
 
 void* shim_StandardAllocator_AllocAligned(void* thisPtr, size_t size, size_t alignment) {
+    ScopedAndroidTls tls;
     if (alignment < sizeof(void*)) alignment = sizeof(void*);
     void* ptr = nullptr;
     if (posix_memalign(&ptr, alignment, size > 0 ? size : alignment) != 0) return nullptr;
@@ -68,10 +75,12 @@ void* shim_StandardAllocator_AllocAligned(void* thisPtr, size_t size, size_t ali
 }
 
 void* shim_StandardAllocator_Realloc(void* thisPtr, void* ptr, size_t newSize) {
+    ScopedAndroidTls tls;
     return realloc(ptr, newSize);
 }
 
 void shim_StandardAllocator_Free(void* thisPtr, void* ptr) {
+    ScopedAndroidTls tls;
     free(ptr);
 }
 
@@ -133,14 +142,17 @@ int64_t shim_nn_os_GetSystemTickFrequency() {
 }
 
 void shim_nn_fs_SetAllocator(void* allocFn, void* deallocFn) {
+    ScopedAndroidTls tls;
     writeLog("[FS] nn::fs::SetAllocator dipanggil");
 }
 
 void shim_nv_SetGraphicsAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData) {
+    ScopedAndroidTls tls;
     writeLog("[NV] nv::SetGraphicsAllocator dipanggil");
 }
 
 void shim_movie_SetAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData) {
+    ScopedAndroidTls tls;
     writeLog("[MOVIE] movie::SetAllocator dipanggil");
 }
 

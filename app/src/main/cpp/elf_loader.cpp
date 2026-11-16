@@ -1,5 +1,6 @@
 #include "elf_loader.h"
 #include "symbol_table.h"
+#include "tls_bridge.h"
 #include "logger.h"
 #include <sys/mman.h>
 #include <signal.h>
@@ -15,7 +16,6 @@
 
 static uint8_t* g_ElfBase = nullptr;
 static uint8_t* g_SwitchTls = nullptr;
-static uint64_t g_AndroidTls = 0;
 static std::vector<uint64_t> g_InitArrayFns;
 static void* g_NnInitStartupPtr = nullptr;
 static void* g_NnMainPtr = nullptr;
@@ -29,19 +29,9 @@ uint64_t getElfOffsetFromAddr(void* addr) {
     return (g_ElfBase && p >= b) ? (p - b) : 0;
 }
 
-static inline uint64_t getTpidrEl0() {
-    uint64_t val;
-    asm volatile("mrs %0, tpidr_el0" : "=r"(val));
-    return val;
-}
-
-static inline void setTpidrEl0(uint64_t val) {
-    asm volatile("msr tpidr_el0, %0" : : "r"(val));
-}
-
 static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
-    uint64_t currentTls = getTpidrEl0();
-    if (g_AndroidTls != 0) setTpidrEl0(g_AndroidTls);
+    uint64_t currentTls = getCurrentTpidrEl0();
+    if (g_AndroidTls != 0) setCurrentTpidrEl0(g_AndroidTls);
 
     auto* uc = reinterpret_cast<ucontext_t*>(ucontext);
     uint64_t pc = uc->uc_mcontext.pc;
@@ -59,7 +49,7 @@ static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
 
             uc->uc_mcontext.regs[0] = 0;
             uc->uc_mcontext.pc += 4;
-            setTpidrEl0(currentTls);
+            setCurrentTpidrEl0(currentTls);
             return;
         }
     }
@@ -80,18 +70,19 @@ static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
     writeLog("[CRASH] Signal %d (%s) di PC=0x%llx (Offset ELF: 0x%llx) | Fault Addr=%p | Ctor #%d",
              sig, strsignal(sig), (unsigned long long)pc, (unsigned long long)offset,
              info->si_addr, g_CurrentCtorIdx);
-    writeLog("[CRASH] x0=0x%llx x1=0x%llx x2=0x%llx SP=0x%llx LR(x30)=0x%llx",
+    writeLog("[CRASH] x0=0x%llx x1=0x%llx x2=0x%llx SP=0x%llx LR(x30)=0x%llx (Offset LR: 0x%llx)",
              (unsigned long long)uc->uc_mcontext.regs[0],
              (unsigned long long)uc->uc_mcontext.regs[1],
              (unsigned long long)uc->uc_mcontext.regs[2],
              (unsigned long long)uc->uc_mcontext.sp,
-             (unsigned long long)uc->uc_mcontext.regs[30]);
+             (unsigned long long)uc->uc_mcontext.regs[30],
+             (unsigned long long)getElfOffsetFromAddr(reinterpret_cast<void*>(uc->uc_mcontext.regs[30])));
     closeLogger();
     _exit(1);
 }
 
 void installCrashAndSvcHandlers() {
-    g_AndroidTls = getTpidrEl0();
+    g_AndroidTls = getCurrentTpidrEl0();
 
     stack_t ss{};
     ss.ss_sp = mmap(nullptr, 65536, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -290,9 +281,9 @@ void jumpToSwitchEntry(void* entryPoint) {
         uint64_t startupOff = reinterpret_cast<uint64_t>(g_NnInitStartupPtr) - reinterpret_cast<uint64_t>(g_ElfBase);
         writeLog("[BOOT] Menjalankan nninitStartup() di %p (Offset ELF: 0x%llx)...",
                  g_NnInitStartupPtr, (unsigned long long)startupOff);
-        setTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
+        setCurrentTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
         reinterpret_cast<Fn>(g_NnInitStartupPtr)();
-        setTpidrEl0(g_AndroidTls);
+        setCurrentTpidrEl0(g_AndroidTls);
         writeLog("[BOOT] nninitStartup() selesai!");
     }
 
@@ -304,9 +295,9 @@ void jumpToSwitchEntry(void* entryPoint) {
             g_CurrentCtorIdx = static_cast<int>(i);
             g_CurrentCtorOffset = ctorOffset;
 
-            setTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
+            setCurrentTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
             reinterpret_cast<Fn>(g_InitArrayFns[i])();
-            setTpidrEl0(g_AndroidTls);
+            setCurrentTpidrEl0(g_AndroidTls);
         }
         alarm(0);
         g_CurrentCtorIdx = -1;
@@ -317,8 +308,8 @@ void jumpToSwitchEntry(void* entryPoint) {
     writeLog("[BOOT] Memanggil nnMain() di %p (Offset ELF: 0x%llx)...",
              entryPoint, (unsigned long long)offset);
 
-    setTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
+    setCurrentTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
     reinterpret_cast<Fn>(entryPoint)();
-    setTpidrEl0(g_AndroidTls);
+    setCurrentTpidrEl0(g_AndroidTls);
     writeLog("[BOOT] nnMain() selesai dieksekusi.");
 }
