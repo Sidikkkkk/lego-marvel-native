@@ -50,11 +50,45 @@ extern "C" {
     int64_t shim_nn_os_GetSystemTick();
     int64_t shim_nn_os_GetSystemTickFrequency();
     uint32_t shim_nn_time_Initialize();
+    uint32_t shim_nn_time_GetCurrentTime(int64_t* outPosixTime);
+    void shim_nn_vi_Initialize();
+    uint32_t shim_nn_vi_OpenDefaultDisplay(void** outDisplay);
+    uint32_t shim_nn_vi_CreateLayer(void** outLayer, void* display, int width, int height);
+    uint32_t shim_nn_vi_GetNativeWindow(void** outWindow, void* layer);
+    int shim_nn_oe_GetOperationMode();
+    int shim_nn_oe_GetPerformanceMode();
+    int shim_nn_oe_GetCurrentFocusState();
+    uint32_t shim_nn_oe_PopNotificationMessage();
+    uint64_t shim_nn_oe_GetDesiredLanguage();
+    uint64_t shim_nn_settings_LanguageCode_Make(int language);
+    void shim_nn_account_Initialize();
+    bool shim_nn_account_TryOpenPreselectedUser(void* outUserHandle);
+    uint32_t shim_nn_account_GetUserId(void* outUid, const void* userHandle);
+    void shim_nn_hid_InitializeNpad();
+    uint32_t shim_nn_hid_GetNpadStyleSet(const uint32_t* npadId);
     void shim_nn_fs_SetAllocator(void* allocFn, void* deallocFn);
+    uint32_t shim_nn_fs_QueryMountRomCacheSize(size_t* outCacheSize);
+    uint32_t shim_nn_fs_MountRom(const char* name, void* cacheBuffer, uint64_t cacheSize);
+    uint32_t shim_nn_fs_MountSaveData(const char* name, const void* uid);
+    uint32_t shim_nn_fs_EnsureSaveData(const void* uid);
+    uint32_t shim_nn_fs_CommitSaveData(const char* name);
+    uint32_t shim_nn_fs_OpenFile(void* outHandle, const char* path, int mode);
+    uint32_t shim_nn_fs_GetFileSize(int64_t* outSize, void* handle);
+    uint32_t shim_nn_fs_ReadFileOut(size_t* outBytesRead, void* handle, int64_t offset, void* buffer, size_t size);
+    uint32_t shim_nn_fs_ReadFileNoOut(void* handle, int64_t offset, void* buffer, size_t size);
+    uint32_t shim_nn_fs_WriteFile(void* handle, int64_t offset, const void* buffer, size_t size, const void* option);
+    uint32_t shim_nn_fs_FlushFile(void* handle);
+    void shim_nn_fs_CloseFile(void* handle);
+    uint32_t shim_nn_fs_GetEntryType(uint32_t* outType, const char* path);
+    uint32_t shim_nn_fs_OpenDirectory(void* outHandle, const char* path, int mode);
+    uint32_t shim_nn_fs_ReadDirectory(int64_t* outCount, void* entryBuffer, void* handle, int64_t maxEntries);
+    void shim_nn_fs_CloseDirectory(void* handle);
+    uint32_t shim_nn_fs_CreateFile(const char* path, int64_t size);
+    uint32_t shim_nn_fs_CreateDirectory(const char* path);
+    uint32_t shim_nn_fs_DeleteFile(const char* path);
     void shim_nv_SetGraphicsAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData);
     uint32_t shim_nv_InitializeGraphics(void* addr, size_t size);
     void shim_movie_SetAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData);
-    uint32_t shim_nn_fs_MountRom(const char* name, void* cacheBuffer, uint64_t cacheSize);
     void* shim_nvnBootstrapLoader(const char* procName);
 }
 
@@ -361,11 +395,45 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"_ZN2nn2os13GetSystemTickEv", reinterpret_cast<void*>(&shim_nn_os_GetSystemTick)},
     {"_ZN2nn2os22GetSystemTickFrequencyEv", reinterpret_cast<void*>(&shim_nn_os_GetSystemTickFrequency)},
     {"_ZN2nn4time10InitializeEv", reinterpret_cast<void*>(&shim_nn_time_Initialize)},
+    {"_ZN2nn4time23StandardUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE", reinterpret_cast<void*>(&shim_nn_time_GetCurrentTime)},
+    {"_ZN2nn2vi10InitializeEv", reinterpret_cast<void*>(&shim_nn_vi_Initialize)},
+    {"_ZN2nn2vi18OpenDefaultDisplayEPPNS0_7DisplayE", reinterpret_cast<void*>(&shim_nn_vi_OpenDefaultDisplay)},
+    {"_ZN2nn2vi11CreateLayerEPPNS0_5LayerEPNS0_7DisplayEii", reinterpret_cast<void*>(&shim_nn_vi_CreateLayer)},
+    {"_ZN2nn2vi15GetNativeWindowEPPvPNS0_5LayerE", reinterpret_cast<void*>(&shim_nn_vi_GetNativeWindow)},
+    {"_ZN2nn2oe16GetOperationModeEv", reinterpret_cast<void*>(&shim_nn_oe_GetOperationMode)},
+    {"_ZN2nn2oe18GetPerformanceModeEv", reinterpret_cast<void*>(&shim_nn_oe_GetPerformanceMode)},
+    {"_ZN2nn2oe20GetCurrentFocusStateEv", reinterpret_cast<void*>(&shim_nn_oe_GetCurrentFocusState)},
+    {"_ZN2nn2oe22PopNotificationMessageEv", reinterpret_cast<void*>(&shim_nn_oe_PopNotificationMessage)},
+    {"_ZN2nn2oe18GetDesiredLanguageEv", reinterpret_cast<void*>(&shim_nn_oe_GetDesiredLanguage)},
+    {"_ZN2nn8settings12LanguageCode4MakeENS0_8LanguageE", reinterpret_cast<void*>(&shim_nn_settings_LanguageCode_Make)},
+    {"_ZN2nn7account10InitializeEv", reinterpret_cast<void*>(&shim_nn_account_Initialize)},
+    {"_ZN2nn7account22TryOpenPreselectedUserEPNS0_10UserHandleE", reinterpret_cast<void*>(&shim_nn_account_TryOpenPreselectedUser)},
+    {"_ZN2nn7account9GetUserIdEPNS0_3UidERKNS0_10UserHandleE", reinterpret_cast<void*>(&shim_nn_account_GetUserId)},
+    {"_ZN2nn3hid14InitializeNpadEv", reinterpret_cast<void*>(&shim_nn_hid_InitializeNpad)},
+    {"_ZN2nn3hid15GetNpadStyleSetERKj", reinterpret_cast<void*>(&shim_nn_hid_GetNpadStyleSet)},
     {"_ZN2nn2fs12SetAllocatorEPFPvmEPFvS1_mE", reinterpret_cast<void*>(&shim_nn_fs_SetAllocator)},
+    {"_ZN2nn2fs22QueryMountRomCacheSizeEPm", reinterpret_cast<void*>(&shim_nn_fs_QueryMountRomCacheSize)},
+    {"_ZN2nn2fs8MountRomEPKcPvm", reinterpret_cast<void*>(&shim_nn_fs_MountRom)},
+    {"_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", reinterpret_cast<void*>(&shim_nn_fs_MountSaveData)},
+    {"_ZN2nn2fs14EnsureSaveDataERKNS_7account3UidE", reinterpret_cast<void*>(&shim_nn_fs_EnsureSaveData)},
+    {"_ZN2nn2fs14CommitSaveDataEPKc", reinterpret_cast<void*>(&shim_nn_fs_CommitSaveData)},
+    {"_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", reinterpret_cast<void*>(&shim_nn_fs_OpenFile)},
+    {"_ZN2nn2fs11GetFileSizeEPlNS0_10FileHandleE", reinterpret_cast<void*>(&shim_nn_fs_GetFileSize)},
+    {"_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", reinterpret_cast<void*>(&shim_nn_fs_ReadFileOut)},
+    {"_ZN2nn2fs8ReadFileENS0_10FileHandleElPvm", reinterpret_cast<void*>(&shim_nn_fs_ReadFileNoOut)},
+    {"_ZN2nn2fs9WriteFileENS0_10FileHandleElPKvmRKNS0_11WriteOptionE", reinterpret_cast<void*>(&shim_nn_fs_WriteFile)},
+    {"_ZN2nn2fs9FlushFileENS0_10FileHandleE", reinterpret_cast<void*>(&shim_nn_fs_FlushFile)},
+    {"_ZN2nn2fs9CloseFileENS0_10FileHandleE", reinterpret_cast<void*>(&shim_nn_fs_CloseFile)},
+    {"_ZN2nn2fs12GetEntryTypeEPNS0_18DirectoryEntryTypeEPKc", reinterpret_cast<void*>(&shim_nn_fs_GetEntryType)},
+    {"_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", reinterpret_cast<void*>(&shim_nn_fs_OpenDirectory)},
+    {"_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl", reinterpret_cast<void*>(&shim_nn_fs_ReadDirectory)},
+    {"_ZN2nn2fs14CloseDirectoryENS0_15DirectoryHandleE", reinterpret_cast<void*>(&shim_nn_fs_CloseDirectory)},
+    {"_ZN2nn2fs10CreateFileEPKcl", reinterpret_cast<void*>(&shim_nn_fs_CreateFile)},
+    {"_ZN2nn2fs15CreateDirectoryEPKc", reinterpret_cast<void*>(&shim_nn_fs_CreateDirectory)},
+    {"_ZN2nn2fs10DeleteFileEPKc", reinterpret_cast<void*>(&shim_nn_fs_DeleteFile)},
     {"_ZN2nv20SetGraphicsAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", reinterpret_cast<void*>(&shim_nv_SetGraphicsAllocator)},
     {"_ZN2nv18InitializeGraphicsEPvm", reinterpret_cast<void*>(&shim_nv_InitializeGraphics)},
     {"_ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", reinterpret_cast<void*>(&shim_movie_SetAllocator)},
-    {"_ZN2nn2fs8MountRomEPKcPvm", reinterpret_cast<void*>(&shim_nn_fs_MountRom)},
     {"_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignEPKcm", reinterpret_cast<void*>(&shim_libcxx_string_assign)},
     {"_ZSt13set_terminatePFvvE", reinterpret_cast<void*>(&shim_std_set_terminate)},
     {"nvnBootstrapLoader", reinterpret_cast<void*>(&shim_nvnBootstrapLoader)},

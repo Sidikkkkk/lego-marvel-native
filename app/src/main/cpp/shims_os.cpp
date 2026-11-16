@@ -12,6 +12,9 @@
 #include <algorithm>
 
 alignas(64) static uint8_t g_DummyMainThread[512] = {0};
+alignas(64) static uint8_t g_DummyDisplay[256] = {0};
+alignas(64) static uint8_t g_DummyLayer[256] = {0};
+alignas(64) static uint8_t g_DummyNativeWindow[256] = {0};
 static const char* g_DummyArgv[] = {"LegoMarvel.nss", nullptr};
 static bool g_LoggedHeapReject = false;
 
@@ -168,6 +171,102 @@ uint32_t shim_nn_time_Initialize() {
     ScopedAndroidTls tls;
     writeLog("[TIME] nn::time::Initialize()");
     return 0;
+}
+
+uint32_t shim_nn_time_GetCurrentTime(int64_t* outPosixTime) {
+    if (outPosixTime) *outPosixTime = static_cast<int64_t>(time(nullptr));
+    return 0;
+}
+
+// Display & Window (nn::vi)
+void shim_nn_vi_Initialize() {
+    ScopedAndroidTls tls;
+    writeLog("[VI] nn::vi::Initialize()");
+}
+
+uint32_t shim_nn_vi_OpenDefaultDisplay(void** outDisplay) {
+    ScopedAndroidTls tls;
+    if (outDisplay) *outDisplay = g_DummyDisplay;
+    writeLog("[VI] nn::vi::OpenDefaultDisplay() -> %p", g_DummyDisplay);
+    return 0;
+}
+
+uint32_t shim_nn_vi_CreateLayer(void** outLayer, void* display, int width, int height) {
+    ScopedAndroidTls tls;
+    if (outLayer) *outLayer = g_DummyLayer;
+    writeLog("[VI] nn::vi::CreateLayer(%dx%d) -> %p", width, height, g_DummyLayer);
+    return 0;
+}
+
+uint32_t shim_nn_vi_GetNativeWindow(void** outWindow, void* layer) {
+    ScopedAndroidTls tls;
+    if (outWindow) *outWindow = g_DummyNativeWindow;
+    writeLog("[VI] nn::vi::GetNativeWindow() -> %p", g_DummyNativeWindow);
+    return 0;
+}
+
+// Operating Environment & Language (nn::oe / nn::settings)
+int shim_nn_oe_GetOperationMode() {
+    return 0; // Handheld mode (720p)
+}
+
+int shim_nn_oe_GetPerformanceMode() {
+    return 0; // Normal
+}
+
+int shim_nn_oe_GetCurrentFocusState() {
+    return 1; // FocusState_InFocus
+}
+
+uint32_t shim_nn_oe_PopNotificationMessage() {
+    return 0; // Tidak ada pesan sistem
+}
+
+uint64_t shim_nn_oe_GetDesiredLanguage() {
+    uint64_t code = 0;
+    memcpy(&code, "en-US", 5);
+    return code;
+}
+
+uint64_t shim_nn_settings_LanguageCode_Make(int language) {
+    uint64_t code = 0;
+    memcpy(&code, "en-US", 5);
+    return code;
+}
+
+// User Account (nn::account)
+void shim_nn_account_Initialize() {
+    ScopedAndroidTls tls;
+    writeLog("[ACCOUNT] nn::account::Initialize()");
+}
+
+bool shim_nn_account_TryOpenPreselectedUser(void* outUserHandle) {
+    ScopedAndroidTls tls;
+    if (outUserHandle) {
+        memset(outUserHandle, 0, 16);
+        *reinterpret_cast<uint64_t*>(outUserHandle) = 1ULL;
+    }
+    writeLog("[ACCOUNT] nn::account::TryOpenPreselectedUser() -> TRUE");
+    return true;
+}
+
+uint32_t shim_nn_account_GetUserId(void* outUid, const void* userHandle) {
+    if (outUid) {
+        uint64_t* uid = reinterpret_cast<uint64_t*>(outUid);
+        uid[0] = 0x1111222233334444ULL;
+        uid[1] = 0x5555666677778888ULL;
+    }
+    return 0;
+}
+
+// Input / HID (nn::hid)
+void shim_nn_hid_InitializeNpad() {
+    ScopedAndroidTls tls;
+    writeLog("[HID] nn::hid::InitializeNpad()");
+}
+
+uint32_t shim_nn_hid_GetNpadStyleSet(const uint32_t* npadId) {
+    return 0x2; // NpadStyleHandheld
 }
 
 void shim_nn_fs_SetAllocator(void* allocFn, void* deallocFn) {
