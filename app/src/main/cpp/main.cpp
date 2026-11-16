@@ -97,18 +97,10 @@ static void requestStoragePermission(JNIEnv* env, jobject activity) {
 }
 
 void android_main(struct android_app* state) {
-    const char* internalDir = state->activity->externalDataPath;
-    if (internalDir) {
-        mkdir(internalDir, 0777);
-        initLogger(internalDir);
-        writeLog("[INIT] NativeActivity berhasil masuk android_main()");
-    }
-
     JNIEnv* env = nullptr;
     state->activity->vm->AttachCurrentThread(&env, nullptr);
 
     if (!hasStoragePermission(env)) {
-        writeLog("[INIT] Meminta izin akses semua file...");
         requestStoragePermission(env, state->activity->clazz);
     }
 
@@ -133,10 +125,7 @@ void android_main(struct android_app* state) {
 
             void* entryPoint = loadSwitchElf("/sdcard/LegoPort/exefs/main.elf");
             if (entryPoint) {
-                writeLog("[BOOT] Menjalankan entry point main.elf di %p...", entryPoint);
-                using EntryFn = void (*)();
-                reinterpret_cast<EntryFn>(entryPoint)();
-                writeLog("[BOOT] Entry point selesai dieksekusi.");
+                jumpToSwitchEntry(entryPoint);
             }
         }
     }

@@ -79,6 +79,7 @@ void installCrashAndSvcHandlers() {
     sigaction(SIGSEGV, &sa, nullptr);
     sigaction(SIGILL,  &sa, nullptr);
     sigaction(SIGBUS,  &sa, nullptr);
+    sigaction(SIGABRT, &sa, nullptr);
 }
 
 static void patchSwitchInstructions(uint32_t* code, size_t count) {
@@ -135,7 +136,8 @@ void* loadSwitchElf(const char* elfPath) {
     }
 
     size_t totalMem = maxVaddr - minVaddr;
-    writeLog("[ELF] Alokasi memori kode game: %.2f MB", totalMem / (1024.0 * 1024.0));
+    writeLog("[ELF] Alokasi memori kode game: %.2f MB (entry offset: 0x%llx)",
+             totalMem / (1024.0 * 1024.0), (unsigned long long)(ehdr->e_entry - minVaddr));
 
     uint8_t* base = reinterpret_cast<uint8_t*>(
         mmap(nullptr, totalMem, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -190,7 +192,14 @@ void* loadSwitchElf(const char* elfPath) {
     void* entry = base + (ehdr->e_entry - minVaddr);
     buf.clear();
     buf.shrink_to_fit();
-
-    setTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
     return entry;
+}
+
+void jumpToSwitchEntry(void* entryPoint) {
+    writeLog("[BOOT] Melompat ke entry point main.elf di %p...", entryPoint);
+    setTpidrEl0(reinterpret_cast<uint64_t>(g_SwitchTls));
+    using EntryFn = void (*)();
+    reinterpret_cast<EntryFn>(entryPoint)();
+    setTpidrEl0(g_AndroidTls);
+    writeLog("[BOOT] Entry point selesai dieksekusi.");
 }
