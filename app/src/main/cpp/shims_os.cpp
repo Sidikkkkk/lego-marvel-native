@@ -8,7 +8,7 @@
 #include <cinttypes>
 #include <algorithm>
 
-static alignas(64) uint8_t g_DummyMainThread[512] = {0};
+alignas(64) static uint8_t g_DummyMainThread[512] = {0};
 
 extern "C" {
 
