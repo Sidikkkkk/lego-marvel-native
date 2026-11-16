@@ -13,12 +13,16 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools platforms;android-34 build-tools;34.0.0 ndk;26.1.10909125 cmake;3.22.1'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
+      - name: Configure Pre-installed NDK & CMake
+        run: |
+          NDK_VER=$(ls "$ANDROID_HOME/ndk" | sort -V | tail -n 1)
+          CMAKE_VER=$(ls "$ANDROID_HOME/cmake" | sort -V | tail -n 1)
+          echo "Menggunakan NDK bawaan: $NDK_VER | CMake: $CMAKE_VER"
+          sed -i "s/compileSdk = 34/compileSdk = 34\n    ndkVersion = \"$NDK_VER\"/" app/build.gradle.kts
+          sed -i "s/3.22.1/$CMAKE_VER/" app/build.gradle.kts
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon
       - name: Upload APK
