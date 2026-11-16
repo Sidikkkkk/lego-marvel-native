@@ -7,8 +7,12 @@
 inline FILE* g_LogFile = nullptr;
 inline std::string g_BaseDataDir;
 
-inline void initLogger(const char* extDir) {
-    g_BaseDataDir = extDir;
+inline void initLogger(const char* dirPath) {
+    if (g_LogFile) {
+        fclose(g_LogFile);
+        g_LogFile = nullptr;
+    }
+    g_BaseDataDir = dirPath;
     std::string logPath = g_BaseDataDir + "/boot_log.txt";
     g_LogFile = fopen(logPath.c_str(), "w");
 }

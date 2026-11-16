@@ -14,7 +14,10 @@ android {
         versionName = "0.1-universal"
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild {
-            cmake { cppFlags += "-std=c++20 -O2" }
+            cmake {
+                cppFlags += "-std=c++20 -O2"
+                arguments += "-DANDROID_STL=c++_static"
+            }
         }
     }
 
