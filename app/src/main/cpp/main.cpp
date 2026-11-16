@@ -1,15 +1,48 @@
 #include <android_native_app_glue.h>
+#include <android/native_window.h>
 #include <android/log.h>
 #include <jni.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <string>
+#include <atomic>
 #include "logger.h"
 #include "device_profile.h"
 #include "elf_loader.h"
 
 static ANativeWindow* g_AndroidWindow = nullptr;
+static std::atomic<int> g_BootStage{0}; // 0=Init, 1=Loading ELF, 2=Running Game, 3=Finished/Stopped
+static uint32_t g_PulseCounter = 0;
+
+static void renderStatusSurface() {
+    ANativeWindow* win = g_AndroidWindow;
+    if (!win) return;
+
+    ANativeWindow_setBuffersGeometry(win, 640, 360, WINDOW_FORMAT_RGBA_8888);
+    ANativeWindow_Buffer buf{};
+    if (ANativeWindow_lock(win, &buf, nullptr) != 0) return;
+
+    auto* pixels = reinterpret_cast<uint32_t*>(buf.bits);
+    const uint32_t bg = 0xFF100B08;      // #080B10 (ABGR)
+    const uint32_t barBg = 0xFF2A1E16;
+    int stage = g_BootStage.load();
+    uint32_t barColor = (stage == 1) ? 0xFF00A5FF : (stage == 2 ? 0xFF50E030 : 0xFF4040FF);
+    int barWidth = (stage == 1) ? 200 : (stage == 2 ? (320 + (g_PulseCounter % 200)) : 520);
+
+    for (int y = 0; y < buf.height; ++y) {
+        uint32_t* row = pixels + y * buf.stride;
+        for (int x = 0; x < buf.width; ++x) {
+            if (y >= 165 && y <= 195 && x >= 60 && x <= 580) {
+                row[x] = (x <= 60 + barWidth) ? barColor : barBg;
+            } else {
+                row[x] = bg;
+            }
+        }
+    }
+    g_PulseCounter += 16;
+    ANativeWindow_unlockAndPost(win);
+}
 
 static bool hasStoragePermission(JNIEnv* env) {
     jclass versionClass = env->FindClass("android/os/Build$VERSION");
@@ -104,16 +137,22 @@ static void handleAppCmd(struct android_app* app, int32_t cmd) {
         g_AndroidWindow = app->window;
         writeLog("[ANDROID] Surface Window siap (%dx%d)",
                  ANativeWindow_getWidth(app->window), ANativeWindow_getHeight(app->window));
+        renderStatusSurface();
     } else if (cmd == APP_CMD_TERM_WINDOW) {
         g_AndroidWindow = nullptr;
     }
 }
 
 static void* gameRunnerThread(void* arg) {
+    installThreadAltStack();
+    g_BootStage.store(1);
     void* entryPoint = loadSwitchElf("/sdcard/LegoPort/exefs/main.elf");
     if (entryPoint) {
+        g_BootStage.store(2);
         jumpToSwitchEntry(entryPoint);
     }
+    g_BootStage.store(3);
+    writeLog("[BOOT] gameRunnerThread selesai.");
     return nullptr;
 }
 
@@ -131,10 +170,12 @@ void android_main(struct android_app* state) {
     while (state->destroyRequested == 0) {
         int events = 0;
         struct android_poll_source* source = nullptr;
-        ALooper_pollOnce(50, nullptr, &events, reinterpret_cast<void**>(&source));
+        ALooper_pollOnce(100, nullptr, &events, reinterpret_cast<void**>(&source));
         if (source != nullptr) {
             source->process(state, source);
         }
+
+        renderStatusSurface();
 
         if (!booted && hasStoragePermission(env)) {
             booted = true;

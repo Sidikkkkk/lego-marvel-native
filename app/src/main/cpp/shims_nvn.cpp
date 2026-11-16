@@ -25,6 +25,7 @@ static std::unordered_map<void*, NvnPoolState> g_Pools;
 static std::unordered_map<void*, NvnBufferState> g_BufferBuilders;
 static std::unordered_map<void*, NvnBufferState> g_Buffers;
 static std::unordered_set<std::string> g_LoggedNvnProcs;
+static uint64_t g_PresentFrameCount = 0;
 
 extern "C" {
 
@@ -41,23 +42,22 @@ int shim_nvnDeviceInitialize(void* device, const void* builder) {
 
 void shim_nvnDeviceGetInteger(const void* device, int pname, int* v) {
     if (!v) return;
-    // Nilai properti GPU Switch yang aman agar engine tidak mengalami pembagian nol / alignment error
     switch (pname) {
-        case 0:  *v = 1; break;      // API major version
-        case 1:  *v = 53; break;     // API minor version
-        case 2:  *v = 256; break;    // Uniform buffer alignment
-        case 3:  *v = 16384; break;  // Max texture size
-        case 4:  *v = 2048; break;   // Max 3D texture size
-        case 5:  *v = 16384; break;  // Max cube map texture size
-        case 6:  *v = 16384; break;  // Max rectangle texture size
-        case 7:  *v = 2048; break;   // Max texture array layers
-        case 8:  *v = 8; break;      // Max color attachments
-        case 9:  *v = 16; break;     // Max vertex attribs
-        case 10: *v = 16; break;     // Max vertex buffers
-        case 11: *v = 4096; break;   // Max vertex buffer stride
-        case 12: *v = 256; break;    // Texture buffer alignment
-        case 13: *v = 256; break;    // Storage buffer alignment
-        case 14: *v = 65536; break;  // Max uniform buffer size
+        case 0:  *v = 1; break;
+        case 1:  *v = 53; break;
+        case 2:  *v = 256; break;
+        case 3:  *v = 16384; break;
+        case 4:  *v = 2048; break;
+        case 5:  *v = 16384; break;
+        case 6:  *v = 16384; break;
+        case 7:  *v = 2048; break;
+        case 8:  *v = 8; break;
+        case 9:  *v = 16; break;
+        case 10: *v = 16; break;
+        case 11: *v = 4096; break;
+        case 12: *v = 256; break;
+        case 13: *v = 256; break;
+        case 14: *v = 65536; break;
         default: *v = 256; break;
     }
 }
@@ -81,13 +81,19 @@ int shim_nvnMemoryPoolInitialize(void* pool, void* builder) {
     ScopedAndroidTls tls;
     if (pool) memset(pool, 0, 256);
     auto it = g_PoolBuilders.find(builder);
+    size_t sz = 0;
+    void* mem = nullptr;
     if (it != g_PoolBuilders.end() && it->second.memory != nullptr) {
         g_Pools[pool] = it->second;
+        mem = it->second.memory;
+        sz = it->second.size;
     } else {
-        void* fallback = mmap(nullptr, 64 * 1024 * 1024, PROT_READ | PROT_WRITE,
-                              MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-        g_Pools[pool] = {fallback, 64 * 1024 * 1024};
+        sz = 64 * 1024 * 1024;
+        mem = mmap(nullptr, sz, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+        g_Pools[pool] = {mem, sz};
     }
+    writeLog("[NVN] nvnMemoryPoolInitialize(pool=%p, mem=%p, size=%.2f MB)", pool, mem, sz / (1024.0 * 1024.0));
     return 1;
 }
 
@@ -102,6 +108,29 @@ void* shim_nvnMemoryPoolGetBufferAddress(void* pool) {
 uint64_t shim_nvnMemoryPoolGetSize(void* pool) {
     auto it = g_Pools.find(pool);
     return (it != g_Pools.end()) ? it->second.size : (64ULL * 1024ULL * 1024ULL);
+}
+
+int shim_nvnQueueInitialize(void* queue, const void* builder) {
+    ScopedAndroidTls tls;
+    if (queue) memset(queue, 0, 256);
+    writeLog("[NVN] nvnQueueInitialize(%p) -> TRUE", queue);
+    return 1;
+}
+
+void shim_nvnQueuePresentTexture(void* queue, void* window, int textureIndex) {
+    ScopedAndroidTls tls;
+    g_PresentFrameCount++;
+    if (g_PresentFrameCount == 1 || (g_PresentFrameCount % 60) == 0) {
+        writeLog("[NVN] nvnQueuePresentTexture(frame=%llu, texIdx=%d)",
+                 (unsigned long long)g_PresentFrameCount, textureIndex);
+    }
+}
+
+int shim_nvnWindowInitialize(void* window, const void* builder) {
+    ScopedAndroidTls tls;
+    if (window) memset(window, 0, 256);
+    writeLog("[NVN] nvnWindowInitialize(%p) -> TRUE", window);
+    return 1;
 }
 
 void shim_nvnBufferBuilderSetDefaults(void* builder) {
@@ -138,11 +167,11 @@ void* shim_nvnBufferMap(void* buffer) {
 
 int shim_nvnWindowAcquireTexture(void* window, void* textureAvailableSync, int* textureIndex) {
     if (textureIndex) *textureIndex = 0;
-    return 0; // NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS
+    return 0;
 }
 
 int shim_nvnSyncWait(const void* sync, uint64_t timeoutNs) {
-    return 1; // NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED
+    return 1;
 }
 
 uint64_t shim_nvnCommandBufferEndRecording(void* cmdBuf) {
@@ -168,6 +197,9 @@ void* shim_nvnDeviceGetProcAddress(void* device, const char* name) {
     if (strcmp(name, "nvnMemoryPoolInitialize") == 0) return reinterpret_cast<void*>(&shim_nvnMemoryPoolInitialize);
     if (strcmp(name, "nvnMemoryPoolGetBufferAddress") == 0) return reinterpret_cast<void*>(&shim_nvnMemoryPoolGetBufferAddress);
     if (strcmp(name, "nvnMemoryPoolGetSize") == 0) return reinterpret_cast<void*>(&shim_nvnMemoryPoolGetSize);
+    if (strcmp(name, "nvnQueueInitialize") == 0) return reinterpret_cast<void*>(&shim_nvnQueueInitialize);
+    if (strcmp(name, "nvnQueuePresentTexture") == 0) return reinterpret_cast<void*>(&shim_nvnQueuePresentTexture);
+    if (strcmp(name, "nvnWindowInitialize") == 0) return reinterpret_cast<void*>(&shim_nvnWindowInitialize);
     if (strcmp(name, "nvnBufferBuilderSetDefaults") == 0) return reinterpret_cast<void*>(&shim_nvnBufferBuilderSetDefaults);
     if (strcmp(name, "nvnBufferBuilderSetStorage") == 0) return reinterpret_cast<void*>(&shim_nvnBufferBuilderSetStorage);
     if (strcmp(name, "nvnBufferInitialize") == 0) return reinterpret_cast<void*>(&shim_nvnBufferInitialize);

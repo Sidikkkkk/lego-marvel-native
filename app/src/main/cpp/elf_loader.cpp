@@ -41,6 +41,18 @@ uint8_t* allocateThreadSwitchTls(void* threadHandle) {
     );
 }
 
+static const char* getSignalNameSafe(int sig) {
+    switch (sig) {
+        case SIGSEGV: return "SIGSEGV";
+        case SIGILL:  return "SIGILL";
+        case SIGBUS:  return "SIGBUS";
+        case SIGABRT: return "SIGABRT";
+        case SIGTRAP: return "SIGTRAP";
+        case SIGFPE:  return "SIGFPE";
+        default:      return "UNKNOWN";
+    }
+}
+
 static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
     uint64_t currentTls = getCurrentTpidrEl0();
     uint64_t androidTls = getThreadAndroidTls();
@@ -70,8 +82,8 @@ static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
     }
 
     writeLog("[CRASH] Signal %d (%s) di PC=0x%llx (Offset ELF: 0x%llx) | Fault Addr=%p | Ctor #%d",
-             sig, strsignal(sig), (unsigned long long)pc, (unsigned long long)offset,
-             info->si_addr, g_CurrentCtorIdx);
+             sig, getSignalNameSafe(sig), (unsigned long long)pc, (unsigned long long)offset,
+             info ? info->si_addr : nullptr, g_CurrentCtorIdx);
     writeLog("[CRASH] x0=0x%llx x1=0x%llx x2=0x%llx SP=0x%llx LR(x30)=0x%llx (Offset LR: 0x%llx)",
              (unsigned long long)uc->uc_mcontext.regs[0],
              (unsigned long long)uc->uc_mcontext.regs[1],
@@ -83,7 +95,7 @@ static void nativeSignalHandler(int sig, siginfo_t* info, void* ucontext) {
     _exit(1);
 }
 
-void installCrashAndSvcHandlers() {
+void installThreadAltStack() {
     stack_t ss{};
     ss.ss_sp = mmap(nullptr, 65536, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     ss.ss_size = 65536;
@@ -91,6 +103,10 @@ void installCrashAndSvcHandlers() {
     if (ss.ss_sp != MAP_FAILED) {
         sigaltstack(&ss, nullptr);
     }
+}
+
+void installCrashAndSvcHandlers() {
+    installThreadAltStack();
 
     struct sigaction sa{};
     sa.sa_sigaction = nativeSignalHandler;
@@ -102,6 +118,7 @@ void installCrashAndSvcHandlers() {
     sigaction(SIGILL,  &sa, nullptr);
     sigaction(SIGBUS,  &sa, nullptr);
     sigaction(SIGABRT, &sa, nullptr);
+    sigaction(SIGFPE,  &sa, nullptr);
 }
 
 static void patchSwitchInstructions(uint32_t* code, size_t count) {
@@ -268,6 +285,7 @@ void* loadSwitchElf(const char* elfPath) {
 void jumpToSwitchEntry(void* entryPoint) {
     using Fn = void (*)();
 
+    installThreadAltStack();
     uint64_t threadAndroidTls = getCurrentTpidrEl0();
     uint8_t* mainSwitchTls = allocateThreadSwitchTls(shim_nn_os_GetCurrentThread());
     bindAndroidTlsToSwitchTls(mainSwitchTls, threadAndroidTls);
@@ -304,5 +322,5 @@ void jumpToSwitchEntry(void* entryPoint) {
     setCurrentTpidrEl0(reinterpret_cast<uint64_t>(mainSwitchTls));
     reinterpret_cast<Fn>(entryPoint)();
     setCurrentTpidrEl0(threadAndroidTls);
-    writeLog("[BOOT] nnMain() selesai dieksekusi.");
+    writeLog("[BOOT] nnMain() selesai dieksekusi (return normal).");
 }

@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 
+void installThreadAltStack();
 void installCrashAndSvcHandlers();
 void* loadSwitchElf(const char* elfPath);
 void jumpToSwitchEntry(void* entryPoint);

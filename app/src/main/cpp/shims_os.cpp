@@ -111,6 +111,7 @@ static HostSemaphore* getOrCreateSemaphore(void* key, int initialCount = 0, int 
 }
 
 static void* switchWorkerThreadEntry(void* rawArg) {
+    installThreadAltStack();
     auto* ht = reinterpret_cast<HostThread*>(rawArg);
     uint64_t androidTls = getCurrentTpidrEl0();
     uint8_t* switchTls = allocateThreadSwitchTls(ht->threadHandle);
