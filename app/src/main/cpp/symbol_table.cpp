@@ -1,11 +1,16 @@
 #include "symbol_table.h"
 #include "logger.h"
 #include <dlfcn.h>
+#include <unistd.h>
 #include <cerrno>
+#include <cstring>
+#include <cstdlib>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
 #include <cstdint>
+
+extern uint64_t getElfOffsetFromAddr(void* addr);
 
 extern "C" {
     void shim_nn_init_Start();
@@ -20,6 +25,7 @@ extern "C" {
     void shim_nn_os_InitializeMutex(void* mutexPtr, bool recursive, int lockLevel);
     void shim_nn_os_LockMutex(void* mutexPtr);
     void shim_nn_os_UnlockMutex(void* mutexPtr);
+    void* shim_nn_os_GetCurrentThread();
     int64_t shim_nn_os_GetSystemTick();
     int64_t shim_nn_os_GetSystemTickFrequency();
     uint32_t shim_nn_fs_MountRom(const char* name, void* cacheBuffer, uint64_t cacheSize);
@@ -31,7 +37,8 @@ extern "C" uint32_t shim_default_stub() {
 }
 
 extern "C" void shim_cxa_pure_virtual() {
-    writeLog("[WARN] __cxa_pure_virtual dipanggil!");
+    writeLog("[WARN] __cxa_pure_virtual dipanggil dari offset 0x%llx",
+             (unsigned long long)getElfOffsetFromAddr(__builtin_return_address(0)));
 }
 
 extern "C" int shim_cxa_guard_acquire(uint64_t* guard) {
@@ -49,6 +56,50 @@ extern "C" int* shim_errno_location() {
     return &errno;
 }
 
+extern "C" void shim_abort() {
+    void* caller = __builtin_return_address(0);
+    writeLog("[ABORT] Game memanggil abort() dari %p (Offset ELF: 0x%llx)",
+             caller, (unsigned long long)getElfOffsetFromAddr(caller));
+    closeLogger();
+    _exit(1);
+}
+
+extern "C" void shim_exit(int code) {
+    void* caller = __builtin_return_address(0);
+    writeLog("[EXIT] Game memanggil exit(%d) dari %p (Offset ELF: 0x%llx)",
+             code, caller, (unsigned long long)getElfOffsetFromAddr(caller));
+    closeLogger();
+    _exit(code);
+}
+
+// Implementasi ABI libc++ std::__1::basic_string<char>::assign(const char*, size_t)
+extern "C" void* shim_libcxx_string_assign(void* thisPtr, const char* s, size_t len) {
+    if (!thisPtr) return nullptr;
+    auto* bytes = reinterpret_cast<uint8_t*>(thisPtr);
+    auto* words = reinterpret_cast<uint64_t*>(thisPtr);
+
+    if ((bytes[0] & 1) != 0 && words[2] != 0) {
+        free(reinterpret_cast<void*>(words[2]));
+    }
+
+    if (len <= 22) {
+        memset(bytes, 0, 24);
+        bytes[0] = static_cast<uint8_t>(len << 1);
+        if (s && len > 0) memcpy(bytes + 1, s, len);
+    } else {
+        size_t cap = (len + 16) & ~15ULL;
+        char* buf = reinterpret_cast<char*>(malloc(cap));
+        if (buf) {
+            if (s) memcpy(buf, s, len);
+            buf[len] = '\0';
+        }
+        words[0] = cap | 1ULL;
+        words[1] = len;
+        words[2] = reinterpret_cast<uint64_t>(buf);
+    }
+    return thisPtr;
+}
+
 static std::unordered_map<std::string, void*> g_Symbols = {
     {"_ZN2nn4init5StartEv", reinterpret_cast<void*>(&shim_nn_init_Start)},
     {"_ZN2nn2os17SetMemoryHeapSizeEm", reinterpret_cast<void*>(&shim_nn_os_SetMemoryHeapSize)},
@@ -62,14 +113,19 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"_ZN2nn2os15InitializeMutexEPNS0_9MutexTypeEbi", reinterpret_cast<void*>(&shim_nn_os_InitializeMutex)},
     {"_ZN2nn2os9LockMutexEPNS0_9MutexTypeE", reinterpret_cast<void*>(&shim_nn_os_LockMutex)},
     {"_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE", reinterpret_cast<void*>(&shim_nn_os_UnlockMutex)},
+    {"_ZN2nn2os16GetCurrentThreadEv", reinterpret_cast<void*>(&shim_nn_os_GetCurrentThread)},
     {"_ZN2nn2os13GetSystemTickEv", reinterpret_cast<void*>(&shim_nn_os_GetSystemTick)},
     {"_ZN2nn2os22GetSystemTickFrequencyEv", reinterpret_cast<void*>(&shim_nn_os_GetSystemTickFrequency)},
     {"_ZN2nn2fs8MountRomEPKcPvm", reinterpret_cast<void*>(&shim_nn_fs_MountRom)},
+    {"_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignEPKcm", reinterpret_cast<void*>(&shim_libcxx_string_assign)},
     {"nvnBootstrapLoader", reinterpret_cast<void*>(&shim_nvnBootstrapLoader)},
     {"__cxa_pure_virtual", reinterpret_cast<void*>(&shim_cxa_pure_virtual)},
     {"__cxa_guard_acquire", reinterpret_cast<void*>(&shim_cxa_guard_acquire)},
     {"__cxa_guard_release", reinterpret_cast<void*>(&shim_cxa_guard_release)},
     {"__errno_location", reinterpret_cast<void*>(&shim_errno_location)},
+    {"abort", reinterpret_cast<void*>(&shim_abort)},
+    {"exit", reinterpret_cast<void*>(&shim_exit)},
+    {"_exit", reinterpret_cast<void*>(&shim_exit)},
 };
 
 static std::unordered_set<std::string> g_LoggedMissing;

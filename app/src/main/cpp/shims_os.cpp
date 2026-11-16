@@ -8,6 +8,8 @@
 #include <cinttypes>
 #include <algorithm>
 
+static alignas(64) uint8_t g_DummyMainThread[512] = {0};
+
 extern "C" {
 
 void shim_nn_init_Start() {
@@ -66,6 +68,10 @@ void shim_nn_os_InitializeMutex(void* mutexPtr, bool recursive, int lockLevel) {
 
 void shim_nn_os_LockMutex(void* mutexPtr) {}
 void shim_nn_os_UnlockMutex(void* mutexPtr) {}
+
+void* shim_nn_os_GetCurrentThread() {
+    return g_DummyMainThread;
+}
 
 int64_t shim_nn_os_GetSystemTick() {
     struct timespec ts{};
