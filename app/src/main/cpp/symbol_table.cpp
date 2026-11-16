@@ -1,6 +1,7 @@
 #include "symbol_table.h"
 #include "tls_bridge.h"
 #include "logger.h"
+#include <sys/mman.h>
 #include <dlfcn.h>
 #include <unistd.h>
 #include <cerrno>
@@ -52,6 +53,15 @@ extern "C" {
     void* shim_nvnBootstrapLoader(const char* procName);
 }
 
+static FILE* g_NullFile = nullptr;
+static FILE* getSafeStdFile() {
+    ScopedAndroidTls tls;
+    if (!g_NullFile) {
+        g_NullFile = fopen("/dev/null", "w+");
+    }
+    return g_NullFile ? g_NullFile : stderr;
+}
+
 extern "C" uint32_t shim_default_stub() {
     return 0;
 }
@@ -96,11 +106,25 @@ extern "C" void shim_exit(int code) {
     _exit(code);
 }
 
+// Alokator virtual lazy (MAP_NORESERVE) untuk blok besar >= 32 MB agar tidak memicu LMK SIGKILL
+static void* allocLazyVirtualBlock(size_t alignment, size_t size) {
+    size_t pageAlign = (alignment > 4096) ? alignment : 4096;
+    size_t allocSize = (size + pageAlign + 4095) & ~4095ULL;
+    void* raw = mmap(nullptr, allocSize, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (raw == MAP_FAILED) return nullptr;
+
+    uintptr_t rawAddr = reinterpret_cast<uintptr_t>(raw);
+    uintptr_t alignedAddr = (rawAddr + pageAlign - 1) & ~(pageAlign - 1);
+    return reinterpret_cast<void*>(alignedAddr);
+}
+
 extern "C" void* shim_malloc(size_t size) {
     ScopedAndroidTls tls;
-    if (size >= 1024 * 1024) {
-        writeLog("[ALLOC] malloc(%.2f MB) dari offset 0x%llx",
-                 size / (1024.0 * 1024.0), (unsigned long long)getElfOffsetFromAddr(__builtin_return_address(0)));
+    if (size >= 32 * 1024 * 1024) {
+        void* p = allocLazyVirtualBlock(4096, size);
+        writeLog("[ALLOC-LAZY] malloc(%.2f MB) -> %p", size / (1024.0 * 1024.0), p);
+        return p;
     }
     return malloc(size);
 }
@@ -108,46 +132,75 @@ extern "C" void* shim_malloc(size_t size) {
 extern "C" void* shim_calloc(size_t nmemb, size_t size) {
     ScopedAndroidTls tls;
     size_t total = nmemb * size;
-    if (total >= 1024 * 1024) {
-        writeLog("[ALLOC] calloc(%.2f MB) dari offset 0x%llx",
-                 total / (1024.0 * 1024.0), (unsigned long long)getElfOffsetFromAddr(__builtin_return_address(0)));
+    if (total >= 32 * 1024 * 1024) {
+        void* p = allocLazyVirtualBlock(4096, total);
+        writeLog("[ALLOC-LAZY] calloc(%.2f MB) -> %p", total / (1024.0 * 1024.0), p);
+        return p;
     }
     return calloc(nmemb, size);
 }
 
 extern "C" void* shim_realloc(void* ptr, size_t size) {
     ScopedAndroidTls tls;
-    if (size >= 1024 * 1024) {
-        writeLog("[ALLOC] realloc(%.2f MB) dari offset 0x%llx",
-                 size / (1024.0 * 1024.0), (unsigned long long)getElfOffsetFromAddr(__builtin_return_address(0)));
+    if (size >= 32 * 1024 * 1024) {
+        void* p = allocLazyVirtualBlock(4096, size);
+        writeLog("[ALLOC-LAZY] realloc(%.2f MB) -> %p", size / (1024.0 * 1024.0), p);
+        return p;
     }
     return realloc(ptr, size);
 }
 
 extern "C" void shim_free(void* ptr) {
     ScopedAndroidTls tls;
+    if (!ptr) return;
+    // Blok mmap lazy halaman besar tidak perlu di-free lewat Bionic Scudo agar tidak crash
+    uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+    if ((addr & 0xFFF) == 0 && addr >= 0x7000000000ULL) {
+        return;
+    }
     free(ptr);
 }
 
 extern "C" int shim_posix_memalign(void** memptr, size_t alignment, size_t size) {
     ScopedAndroidTls tls;
-    if (size >= 1024 * 1024) {
-        writeLog("[ALLOC] posix_memalign(%.2f MB) dari offset 0x%llx",
-                 size / (1024.0 * 1024.0), (unsigned long long)getElfOffsetFromAddr(__builtin_return_address(0)));
+    if (!memptr) return EINVAL;
+    if (size >= 32 * 1024 * 1024) {
+        void* p = allocLazyVirtualBlock(alignment, size);
+        writeLog("[ALLOC-LAZY] posix_memalign(%.2f MB) -> %p", size / (1024.0 * 1024.0), p);
+        if (!p) return ENOMEM;
+        *memptr = p;
+        return 0;
     }
     return posix_memalign(memptr, alignment, size);
 }
 
 extern "C" void* shim_aligned_alloc(size_t alignment, size_t size) {
     ScopedAndroidTls tls;
-    if (size >= 1024 * 1024) {
-        writeLog("[ALLOC] aligned_alloc(%.2f MB) dari offset 0x%llx",
-                 size / (1024.0 * 1024.0), (unsigned long long)getElfOffsetFromAddr(__builtin_return_address(0)));
+    if (size >= 32 * 1024 * 1024) {
+        void* p = allocLazyVirtualBlock(alignment, size);
+        writeLog("[ALLOC-LAZY] aligned_alloc(%.2f MB) -> %p", size / (1024.0 * 1024.0), p);
+        return p;
     }
     if (alignment < sizeof(void*)) alignment = sizeof(void*);
     void* ptr = nullptr;
     if (posix_memalign(&ptr, alignment, size > 0 ? size : alignment) != 0) return nullptr;
     return ptr;
+}
+
+extern "C" size_t shim_fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
+    ScopedAndroidTls tls;
+    if (!stream) stream = getSafeStdFile();
+    return fwrite(ptr, size, nmemb, stream);
+}
+
+extern "C" int shim_fprintf(FILE* stream, const char* format, ...) {
+    ScopedAndroidTls tls;
+    if (!stream) stream = getSafeStdFile();
+    va_list ap;
+    va_start(ap, format);
+    int ret = vfprintf(stream, format, ap);
+    va_end(ap);
+    return ret;
 }
 
 extern "C" int shim_vsnprintf(char* str, size_t size, const char* format, va_list ap) {
@@ -270,6 +323,8 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"free", reinterpret_cast<void*>(&shim_free)},
     {"posix_memalign", reinterpret_cast<void*>(&shim_posix_memalign)},
     {"aligned_alloc", reinterpret_cast<void*>(&shim_aligned_alloc)},
+    {"fwrite", reinterpret_cast<void*>(&shim_fwrite)},
+    {"fprintf", reinterpret_cast<void*>(&shim_fprintf)},
     {"snprintf", reinterpret_cast<void*>(&shim_snprintf)},
     {"vsnprintf", reinterpret_cast<void*>(&shim_vsnprintf)},
     {"sprintf", reinterpret_cast<void*>(&shim_sprintf)},
@@ -283,6 +338,10 @@ static std::unordered_set<std::string> g_LoggedMissing;
 void* resolveSymbol(const char* name) {
     if (!name || name[0] == '\0') {
         return reinterpret_cast<void*>(&shim_default_stub);
+    }
+
+    if (strcmp(name, "stdin") == 0 || strcmp(name, "stdout") == 0 || strcmp(name, "stderr") == 0) {
+        return getSafeStdFile();
     }
 
     auto it = g_Symbols.find(name);
