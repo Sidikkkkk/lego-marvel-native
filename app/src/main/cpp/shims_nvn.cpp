@@ -28,6 +28,13 @@ static std::unordered_map<void*, NvnBufferState> g_Buffers;
 static std::unordered_set<std::string> g_LoggedNvnProcs;
 std::atomic<uint64_t> g_NvnPresentFrames{0};
 
+static void* allocNvnLazyPool(size_t size) {
+    size_t actualSize = (size >= 4096) ? ((size + 4095) & ~4095ULL) : (64ULL * 1024ULL * 1024ULL);
+    void* mem = mmap(nullptr, actualSize, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    return (mem != MAP_FAILED) ? mem : nullptr;
+}
+
 extern "C" {
 
 int shim_nvn_default_ok() {
@@ -78,26 +85,26 @@ void shim_nvnMemoryPoolBuilderSetDefaults(void* builder) {
 
 void shim_nvnMemoryPoolBuilderSetStorage(void* builder, void* memory, size_t size) {
     ScopedAndroidTls tls;
-    g_PoolBuilders[builder] = {memory, size};
+    size_t actualSize = (size >= 4096) ? size : (64ULL * 1024ULL * 1024ULL);
+    void* actualMem = (memory != nullptr) ? memory : allocNvnLazyPool(actualSize);
+    g_PoolBuilders[builder] = {actualMem, actualSize};
     writeLog("[NVN] nvnMemoryPoolBuilderSetStorage(builder=%p, mem=%p, size=%.2f MB)",
-             builder, memory, size / (1024.0 * 1024.0));
+             builder, actualMem, actualSize / (1024.0 * 1024.0));
 }
 
 int shim_nvnMemoryPoolInitialize(void* pool, void* builder) {
     ScopedAndroidTls tls;
     if (pool) memset(pool, 0, 256);
     auto it = g_PoolBuilders.find(builder);
-    size_t sz = 0;
-    void* mem = nullptr;
-    if (it != g_PoolBuilders.end() && it->second.memory != nullptr) {
-        g_Pools[pool] = it->second;
-        mem = it->second.memory;
-        sz = it->second.size;
-    } else {
-        sz = 64 * 1024 * 1024;
-        mem = mmap(nullptr, sz, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-        g_Pools[pool] = {mem, sz};
+    size_t sz = (it != g_PoolBuilders.end() && it->second.size >= 4096)
+                ? it->second.size : (64ULL * 1024ULL * 1024ULL);
+    void* mem = (it != g_PoolBuilders.end() && it->second.memory != nullptr)
+                ? it->second.memory : allocNvnLazyPool(sz);
+
+    g_Pools[pool] = {mem, sz};
+    // Simpan pointer memori di awal struct pool agar pembacaan langsung oleh engine tetap aman
+    if (pool) {
+        *reinterpret_cast<void**>(pool) = mem;
     }
     writeLog("[NVN] nvnMemoryPoolInitialize(pool=%p, mem=%p, size=%.2f MB)", pool, mem, sz / (1024.0 * 1024.0));
     return 1;
@@ -109,13 +116,15 @@ void* shim_nvnMemoryPoolGetBufferAddress(void* pool) {
     if (it != g_Pools.end() && it->second.memory != nullptr) {
         return it->second.memory;
     }
-    return nullptr;
+    void* fallback = allocNvnLazyPool(64ULL * 1024ULL * 1024ULL);
+    g_Pools[pool] = {fallback, 64ULL * 1024ULL * 1024ULL};
+    return fallback;
 }
 
 uint64_t shim_nvnMemoryPoolGetSize(void* pool) {
     ScopedAndroidTls tls;
     auto it = g_Pools.find(pool);
-    return (it != g_Pools.end()) ? it->second.size : (64ULL * 1024ULL * 1024ULL);
+    return (it != g_Pools.end() && it->second.size > 0) ? it->second.size : (64ULL * 1024ULL * 1024ULL);
 }
 
 int shim_nvnQueueInitialize(void* queue, const void* builder) {
