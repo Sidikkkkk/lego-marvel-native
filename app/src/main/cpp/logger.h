@@ -1,4 +1,5 @@
 #pragma once
+#include "tls_bridge.h"
 #include <android/log.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -11,6 +12,7 @@ inline int g_LogFd = -1;
 inline std::string g_BaseDataDir;
 
 inline void initLogger(const char* dirPath) {
+    ScopedAndroidTls tls;
     if (g_LogFd >= 0) {
         close(g_LogFd);
         g_LogFd = -1;
@@ -21,6 +23,7 @@ inline void initLogger(const char* dirPath) {
 }
 
 inline void writeLog(const char* fmt, ...) {
+    ScopedAndroidTls tls;
     char buf[2048];
     va_list args;
     va_start(args, fmt);
@@ -43,6 +46,7 @@ inline void writeLog(const char* fmt, ...) {
 }
 
 inline void closeLogger() {
+    ScopedAndroidTls tls;
     if (g_LogFd >= 0) {
         fsync(g_LogFd);
         close(g_LogFd);

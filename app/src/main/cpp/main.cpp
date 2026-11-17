@@ -1,5 +1,6 @@
 #include <android_native_app_glue.h>
 #include <android/native_window.h>
+#include <android/input.h>
 #include <android/log.h>
 #include <jni.h>
 #include <pthread.h>
@@ -11,15 +12,20 @@
 #include "device_profile.h"
 #include "elf_loader.h"
 
+extern std::atomic<uint64_t> g_NvnPresentFrames;
+extern std::atomic<uint64_t> g_TouchSwitchButtons;
+
 static ANativeWindow* g_AndroidWindow = nullptr;
 static std::atomic<int> g_BootStage{0};
-static int g_LastRenderedStage = -1;
+static int g_LastRenderedState = -1;
 
 static void renderStatusSurface(bool force = false) {
     ANativeWindow* win = g_AndroidWindow;
     int stage = g_BootStage.load();
-    if (!win || (!force && stage == g_LastRenderedStage)) return;
-    g_LastRenderedStage = stage;
+    uint64_t frames = g_NvnPresentFrames.load();
+    int stateKey = (stage << 16) | static_cast<int>((frames > 0 ? 1 : 0) | ((frames / 30) & 0xFF));
+    if (!win || (!force && stateKey == g_LastRenderedState)) return;
+    g_LastRenderedState = stateKey;
 
     ANativeWindow_setBuffersGeometry(win, 320, 180, WINDOW_FORMAT_RGBA_8888);
     ANativeWindow_Buffer buf{};
@@ -28,8 +34,8 @@ static void renderStatusSurface(bool force = false) {
     auto* pixels = reinterpret_cast<uint32_t*>(buf.bits);
     const uint32_t bg = 0xFF100B08;
     const uint32_t barBg = 0xFF2A1E16;
-    uint32_t barColor = (stage == 1) ? 0xFF00A5FF : (stage == 2 ? 0xFF50E030 : 0xFF4040FF);
-    int barWidth = (stage == 1) ? 100 : (stage == 2 ? 200 : 260);
+    uint32_t barColor = (frames > 0) ? 0xFFFFB020 : ((stage == 1) ? 0xFF00A5FF : (stage == 2 ? 0xFF50E030 : 0xFF4040FF));
+    int barWidth = (frames > 0) ? 260 : ((stage == 1) ? 100 : (stage == 2 ? 200 : 260));
 
     for (int y = 0; y < buf.height; ++y) {
         uint32_t* row = pixels + y * buf.stride;
@@ -132,6 +138,20 @@ static void requestStoragePermission(JNIEnv* env, jobject activity) {
     }
 }
 
+static int32_t handleInputEvent(struct android_app* app, AInputEvent* event) {
+    if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) {
+        int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
+        if (action == AMOTION_EVENT_ACTION_DOWN || action == AMOTION_EVENT_ACTION_MOVE) {
+            // Bit 0 = A, Bit 10 = Plus (+)
+            g_TouchSwitchButtons.store((1ULL << 0) | (1ULL << 10));
+        } else if (action == AMOTION_EVENT_ACTION_UP || action == AMOTION_EVENT_ACTION_CANCEL) {
+            g_TouchSwitchButtons.store(0);
+        }
+        return 1;
+    }
+    return 0;
+}
+
 static void handleAppCmd(struct android_app* app, int32_t cmd) {
     if (cmd == APP_CMD_INIT_WINDOW && app->window != nullptr) {
         g_AndroidWindow = app->window;
@@ -158,6 +178,7 @@ static void* gameRunnerThread(void* arg) {
 
 void android_main(struct android_app* state) {
     state->onAppCmd = handleAppCmd;
+    state->onInputEvent = handleInputEvent;
 
     JNIEnv* env = nullptr;
     state->activity->vm->AttachCurrentThread(&env, nullptr);

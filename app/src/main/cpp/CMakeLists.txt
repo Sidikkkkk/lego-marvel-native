@@ -11,7 +11,7 @@ add_library(legoloader SHARED
     symbol_table.cpp
     shims_os.cpp
     shims_fs.cpp
-    shims_nvn.cpp
+    shims_nvn.cpp shims_sdk.cpp
 )
 
 target_include_directories(legoloader PRIVATE

@@ -26,9 +26,12 @@ extern "C" {
     void* shim_StandardAllocator_AllocAligned(void* thisPtr, size_t size, size_t alignment);
     void* shim_StandardAllocator_Realloc(void* thisPtr, void* ptr, size_t newSize);
     void shim_StandardAllocator_Free(void* thisPtr, void* ptr);
+    size_t shim_StandardAllocator_GetSizeOf(const void* thisPtr, const void* ptr);
     void shim_nn_os_InitializeMutex(void* mutexPtr, bool recursive, int lockLevel);
     void shim_nn_os_LockMutex(void* mutexPtr);
+    bool shim_nn_os_TryLockMutex(void* mutexPtr);
     void shim_nn_os_UnlockMutex(void* mutexPtr);
+    void shim_nn_os_FinalizeMutex(void* mutexPtr);
     void shim_nn_os_InitializeEvent(void* eventPtr, bool signaled, int clearMode);
     void shim_nn_os_WaitEvent(void* eventPtr);
     void shim_nn_os_SignalEvent(void* eventPtr);
@@ -51,6 +54,8 @@ extern "C" {
     int64_t shim_nn_os_GetSystemTickFrequency();
     uint32_t shim_nn_time_Initialize();
     uint32_t shim_nn_time_GetCurrentTime(int64_t* outPosixTime);
+    uint32_t shim_nn_time_ToCalendarTimeUtc(void* outCal, const int64_t* posixTime);
+    uint32_t shim_nn_time_ToCalendarTimeLocal(void* outCal, void* outAddInfo, const int64_t* posixTime);
     void shim_nn_vi_Initialize();
     uint32_t shim_nn_vi_OpenDefaultDisplay(void** outDisplay);
     uint32_t shim_nn_vi_CreateLayer(void** outLayer, void* display, int width, int height);
@@ -61,11 +66,15 @@ extern "C" {
     uint32_t shim_nn_oe_PopNotificationMessage();
     uint64_t shim_nn_oe_GetDesiredLanguage();
     uint64_t shim_nn_settings_LanguageCode_Make(int language);
+    bool shim_nn_settings_LanguageEq(const uint64_t* a, const uint64_t* b);
     void shim_nn_account_Initialize();
     bool shim_nn_account_TryOpenPreselectedUser(void* outUserHandle);
     uint32_t shim_nn_account_GetUserId(void* outUid, const void* userHandle);
     void shim_nn_hid_InitializeNpad();
     uint32_t shim_nn_hid_GetNpadStyleSet(const uint32_t* npadId);
+    void shim_nn_hid_GetNpadState(void* outState, const uint32_t* npadId);
+    int shim_nn_hid_GetHandles(void* outHandles, int count, const uint32_t* npadId, uint32_t styleSet);
+    uint32_t shim_nn_hid_ShowControllerSupport(const void* arg);
     void shim_nn_fs_SetAllocator(void* allocFn, void* deallocFn);
     uint32_t shim_nn_fs_QueryMountRomCacheSize(size_t* outCacheSize);
     uint32_t shim_nn_fs_MountRom(const char* name, void* cacheBuffer, uint64_t cacheSize);
@@ -86,10 +95,46 @@ extern "C" {
     uint32_t shim_nn_fs_CreateFile(const char* path, int64_t size);
     uint32_t shim_nn_fs_CreateDirectory(const char* path);
     uint32_t shim_nn_fs_DeleteFile(const char* path);
+    uint32_t shim_nn_fs_RenameFile(const char* oldPath, const char* newPath);
+    uint32_t shim_nn_fs_DeleteDirRecursive(const char* path);
     void shim_nv_SetGraphicsAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData);
     uint32_t shim_nv_InitializeGraphics(void* addr, size_t size);
     void shim_movie_SetAllocator(void* allocFn, void* freeFn, void* reallocFn, void* userData);
     void* shim_nvnBootstrapLoader(const char* procName);
+    bool shim_BinaryFileHeader_IsValid(const void* thisPtr, int64_t expectedMagic, int majorVer, int minorVer, int microVer);
+    bool shim_BinaryFileHeader_IsRelocated(const void* thisPtr);
+    void* shim_BinaryFileHeader_GetFirstBlock(const void* thisPtr);
+    void* shim_BinaryFileHeader_GetRelocationTable(const void* thisPtr);
+    void shim_RelocationTable_Relocate(void* rltPtr);
+    void* shim_nn_util_ReferSymbol(const void* sym);
+    void shim_ApplicationErrorArg_ctor(void* thisPtr);
+    void shim_ApplicationErrorArg_SetCode(void* thisPtr, uint32_t code);
+    void shim_ApplicationErrorArg_SetDialogMsg(void* thisPtr, const char* msg);
+    void shim_ApplicationErrorArg_SetFullMsg(void* thisPtr, const char* msg);
+    void shim_ApplicationErrorArg_SetLang(void* thisPtr, const void* lang);
+    void shim_nn_err_ShowApplicationError(const void* argPtr);
+    void shim_nn_audio_InitParam(void* param);
+    size_t shim_nn_audio_GetConfigWorkBufSize(const void* param);
+    size_t shim_nn_audio_GetRendererWorkBufSize(const void* param);
+    bool shim_nn_audio_IsValidParam(const void* param);
+    void shim_nn_audio_InitConfig(void* config, const void* param, void* workBuf, size_t workBufSize);
+    uint32_t shim_nn_audio_OpenRenderer(void* handle, void* sysEvent, const void* param, void* workBuf, size_t workBufSize);
+    uint32_t shim_nn_audio_StartRenderer(void* handle);
+    uint32_t shim_nn_audio_RequestUpdateRenderer(void* handle, const void* config);
+    bool shim_nn_audio_AcquireTrue();
+    bool shim_nn_audio_AppendWaveBuffer(void* voice, const void* waveBuf);
+    const void* shim_nn_audio_GetReleasedWaveBuffer(void* voice);
+    int shim_nn_audio_GetWaveBufferCount(const void* voice);
+    int shim_nn_audio_GetVoicePlayState(const void* voice);
+    uint8_t shim_glslc_Initialize();
+    void shim_glslc_noop();
+    int shim_nn_socket_Error();
+    int shim_nn_socket_Ok();
+    uint16_t shim_nn_socket_InetNtohs(uint16_t netshort);
+    size_t shim_nn_swkbd_GetStringBufSize();
+    size_t shim_nn_swkbd_GetWorkBufSize(bool enableDic);
+    uint32_t shim_nn_swkbd_ShowKeyboard(void* outString, const void* arg);
+    void shim_nn_UnexpectedDefaultImpl(const char* func, const char* file, int line);
 }
 
 static FILE* g_NullFile = nullptr;
@@ -267,13 +312,8 @@ extern "C" int shim_puts(const char* s) {
     return 0;
 }
 
-extern "C" int shim_putchar(int c) {
-    return c;
-}
-
-extern "C" int shim_fflush(FILE* stream) {
-    return 0;
-}
+extern "C" int shim_putchar(int c) { return c; }
+extern "C" int shim_fflush(FILE* stream) { return 0; }
 
 extern "C" size_t shim_fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
     ScopedAndroidTls tls;
@@ -371,14 +411,18 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"_ZN2nn3mem17StandardAllocator8AllocateEmm", reinterpret_cast<void*>(&shim_StandardAllocator_AllocAligned)},
     {"_ZN2nn3mem17StandardAllocator10ReallocateEPvm", reinterpret_cast<void*>(&shim_StandardAllocator_Realloc)},
     {"_ZN2nn3mem17StandardAllocator4FreeEPv", reinterpret_cast<void*>(&shim_StandardAllocator_Free)},
+    {"_ZNK2nn3mem17StandardAllocator9GetSizeOfEPKv", reinterpret_cast<void*>(&shim_StandardAllocator_GetSizeOf)},
     {"_ZN2nn2os15InitializeMutexEPNS0_9MutexTypeEbi", reinterpret_cast<void*>(&shim_nn_os_InitializeMutex)},
     {"_ZN2nn2os9LockMutexEPNS0_9MutexTypeE", reinterpret_cast<void*>(&shim_nn_os_LockMutex)},
+    {"_ZN2nn2os12TryLockMutexEPNS0_9MutexTypeE", reinterpret_cast<void*>(&shim_nn_os_TryLockMutex)},
     {"_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE", reinterpret_cast<void*>(&shim_nn_os_UnlockMutex)},
+    {"_ZN2nn2os13FinalizeMutexEPNS0_9MutexTypeE", reinterpret_cast<void*>(&shim_nn_os_FinalizeMutex)},
     {"_ZN2nn2os15InitializeEventEPNS0_9EventTypeEbNS0_14EventClearModeE", reinterpret_cast<void*>(&shim_nn_os_InitializeEvent)},
     {"_ZN2nn2os9WaitEventEPNS0_9EventTypeE", reinterpret_cast<void*>(&shim_nn_os_WaitEvent)},
     {"_ZN2nn2os11SignalEventEPNS0_9EventTypeE", reinterpret_cast<void*>(&shim_nn_os_SignalEvent)},
     {"_ZN2nn2os10ClearEventEPNS0_9EventTypeE", reinterpret_cast<void*>(&shim_nn_os_ClearEvent)},
     {"_ZN2nn2os13FinalizeEventEPNS0_9EventTypeE", reinterpret_cast<void*>(&shim_nn_os_FinalizeEvent)},
+    {"_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE", reinterpret_cast<void*>(&shim_nn_os_FinalizeEvent)},
     {"_ZN2nn2os19InitializeSemaphoreEPNS0_13SemaphoreTypeEii", reinterpret_cast<void*>(&shim_nn_os_InitializeSemaphore)},
     {"_ZN2nn2os16AcquireSemaphoreEPNS0_13SemaphoreTypeE", reinterpret_cast<void*>(&shim_nn_os_AcquireSemaphore)},
     {"_ZN2nn2os19TryAcquireSemaphoreEPNS0_13SemaphoreTypeE", reinterpret_cast<void*>(&shim_nn_os_TryAcquireSemaphore)},
@@ -387,6 +431,10 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"_ZN2nn2os12CreateThreadEPNS0_10ThreadTypeEPFvPvES3_S3_mi", reinterpret_cast<void*>(&shim_nn_os_CreateThread)},
     {"_ZN2nn2os12CreateThreadEPNS0_10ThreadTypeEPFvPvES3_S3_mii", reinterpret_cast<void*>(&shim_nn_os_CreateThreadCore)},
     {"_ZN2nn2os11StartThreadEPNS0_10ThreadTypeE", reinterpret_cast<void*>(&shim_nn_os_StartThread)},
+    {"_ZN2nn2os13DestroyThreadEPNS0_10ThreadTypeE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn2os17SetThreadCoreMaskEPNS0_10ThreadTypeEim", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn2os20ChangeThreadPriorityEPNS0_10ThreadTypeEi", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn2os13SetThreadNameEPNS0_10ThreadTypeEPKc", reinterpret_cast<void*>(&shim_default_stub)},
     {"_ZN2nn2os16GetCurrentThreadEv", reinterpret_cast<void*>(&shim_nn_os_GetCurrentThread)},
     {"_ZN2nn2os11GetHostArgcEv", reinterpret_cast<void*>(&shim_nn_os_GetHostArgc)},
     {"_ZN2nn2os11GetHostArgvEv", reinterpret_cast<void*>(&shim_nn_os_GetHostArgv)},
@@ -396,6 +444,8 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"_ZN2nn2os22GetSystemTickFrequencyEv", reinterpret_cast<void*>(&shim_nn_os_GetSystemTickFrequency)},
     {"_ZN2nn4time10InitializeEv", reinterpret_cast<void*>(&shim_nn_time_Initialize)},
     {"_ZN2nn4time23StandardUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE", reinterpret_cast<void*>(&shim_nn_time_GetCurrentTime)},
+    {"_ZN2nn4time19ToCalendarTimeInUtcERKNS0_9PosixTimeE", reinterpret_cast<void*>(&shim_nn_time_ToCalendarTimeUtc)},
+    {"_ZN2nn4time14ToCalendarTimeEPNS0_12CalendarTimeEPNS0_22CalendarAdditionalInfoERKNS0_9PosixTimeE", reinterpret_cast<void*>(&shim_nn_time_ToCalendarTimeLocal)},
     {"_ZN2nn2vi10InitializeEv", reinterpret_cast<void*>(&shim_nn_vi_Initialize)},
     {"_ZN2nn2vi18OpenDefaultDisplayEPPNS0_7DisplayE", reinterpret_cast<void*>(&shim_nn_vi_OpenDefaultDisplay)},
     {"_ZN2nn2vi11CreateLayerEPPNS0_5LayerEPNS0_7DisplayEii", reinterpret_cast<void*>(&shim_nn_vi_CreateLayer)},
@@ -405,15 +455,39 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"_ZN2nn2oe20GetCurrentFocusStateEv", reinterpret_cast<void*>(&shim_nn_oe_GetCurrentFocusState)},
     {"_ZN2nn2oe22PopNotificationMessageEv", reinterpret_cast<void*>(&shim_nn_oe_PopNotificationMessage)},
     {"_ZN2nn2oe18GetDesiredLanguageEv", reinterpret_cast<void*>(&shim_nn_oe_GetDesiredLanguage)},
+    {"_ZN2nn2oe31EnterExitRequestHandlingSectionEv", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn2oe31LeaveExitRequestHandlingSectionEv", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn2oe20SetFocusHandlingModeENS0_17FocusHandlingModeE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn2oe28SetResumeNotificationEnabledEb", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn2oe44SetPerformanceModeChangedNotificationEnabledEb", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn2oe42SetOperationModeChangedNotificationEnabledEb", reinterpret_cast<void*>(&shim_default_stub)},
     {"_ZN2nn8settings12LanguageCode4MakeENS0_8LanguageE", reinterpret_cast<void*>(&shim_nn_settings_LanguageCode_Make)},
+    {"_ZN2nn8settingseqERKNS0_12LanguageCodeERKNS0_8LanguageE", reinterpret_cast<void*>(&shim_nn_settings_LanguageEq)},
     {"_ZN2nn7account10InitializeEv", reinterpret_cast<void*>(&shim_nn_account_Initialize)},
     {"_ZN2nn7account22TryOpenPreselectedUserEPNS0_10UserHandleE", reinterpret_cast<void*>(&shim_nn_account_TryOpenPreselectedUser)},
     {"_ZN2nn7account9GetUserIdEPNS0_3UidERKNS0_10UserHandleE", reinterpret_cast<void*>(&shim_nn_account_GetUserId)},
     {"_ZN2nn3hid14InitializeNpadEv", reinterpret_cast<void*>(&shim_nn_hid_InitializeNpad)},
     {"_ZN2nn3hid15GetNpadStyleSetERKj", reinterpret_cast<void*>(&shim_nn_hid_GetNpadStyleSet)},
+    {"_ZN2nn3hid24SetSupportedNpadStyleSetENS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn3hid22SetSupportedNpadIdTypeEPKjm", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn3hid18SetNpadJoyHoldTypeENS0_15NpadJoyHoldTypeE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn3hid12GetNpadStateEPNS0_17NpadHandheldStateERKj", reinterpret_cast<void*>(&shim_nn_hid_GetNpadState)},
+    {"_ZN2nn3hid12GetNpadStateEPNS0_16NpadFullKeyStateERKj", reinterpret_cast<void*>(&shim_nn_hid_GetNpadState)},
+    {"_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyDualStateERKj", reinterpret_cast<void*>(&shim_nn_hid_GetNpadState)},
+    {"_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyLeftStateERKj", reinterpret_cast<void*>(&shim_nn_hid_GetNpadState)},
+    {"_ZN2nn3hid12GetNpadStateEPNS0_17NpadJoyRightStateERKj", reinterpret_cast<void*>(&shim_nn_hid_GetNpadState)},
+    {"_ZN2nn3hid23GetSixAxisSensorHandlesEPNS0_19SixAxisSensorHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", reinterpret_cast<void*>(&shim_nn_hid_GetHandles)},
+    {"_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn3hid25GetVibrationDeviceHandlesEPNS0_21VibrationDeviceHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", reinterpret_cast<void*>(&shim_nn_hid_GetHandles)},
+    {"_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn3hid20ControllerSupportArg10SetDefaultEv", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn3hid21ShowControllerSupportERKNS0_20ControllerSupportArgE", reinterpret_cast<void*>(&shim_nn_hid_ShowControllerSupport)},
     {"_ZN2nn2fs12SetAllocatorEPFPvmEPFvS1_mE", reinterpret_cast<void*>(&shim_nn_fs_SetAllocator)},
     {"_ZN2nn2fs22QueryMountRomCacheSizeEPm", reinterpret_cast<void*>(&shim_nn_fs_QueryMountRomCacheSize)},
     {"_ZN2nn2fs8MountRomEPKcPvm", reinterpret_cast<void*>(&shim_nn_fs_MountRom)},
+    {"_ZN2nn2fs7UnmountEPKc", reinterpret_cast<void*>(&shim_default_stub)},
     {"_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", reinterpret_cast<void*>(&shim_nn_fs_MountSaveData)},
     {"_ZN2nn2fs14EnsureSaveDataERKNS_7account3UidE", reinterpret_cast<void*>(&shim_nn_fs_EnsureSaveData)},
     {"_ZN2nn2fs14CommitSaveDataEPKc", reinterpret_cast<void*>(&shim_nn_fs_CommitSaveData)},
@@ -431,9 +505,90 @@ static std::unordered_map<std::string, void*> g_Symbols = {
     {"_ZN2nn2fs10CreateFileEPKcl", reinterpret_cast<void*>(&shim_nn_fs_CreateFile)},
     {"_ZN2nn2fs15CreateDirectoryEPKc", reinterpret_cast<void*>(&shim_nn_fs_CreateDirectory)},
     {"_ZN2nn2fs10DeleteFileEPKc", reinterpret_cast<void*>(&shim_nn_fs_DeleteFile)},
+    {"_ZN2nn2fs15DeleteDirectoryEPKc", reinterpret_cast<void*>(&shim_nn_fs_DeleteFile)},
+    {"_ZN2nn2fs26DeleteDirectoryRecursivelyEPKc", reinterpret_cast<void*>(&shim_nn_fs_DeleteDirRecursive)},
+    {"_ZN2nn2fs10RenameFileEPKcS2_", reinterpret_cast<void*>(&shim_nn_fs_RenameFile)},
     {"_ZN2nv20SetGraphicsAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", reinterpret_cast<void*>(&shim_nv_SetGraphicsAllocator)},
     {"_ZN2nv18InitializeGraphicsEPvm", reinterpret_cast<void*>(&shim_nv_InitializeGraphics)},
     {"_ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", reinterpret_cast<void*>(&shim_movie_SetAllocator)},
+    {"_ZNK2nn4util16BinaryFileHeader7IsValidEliii", reinterpret_cast<void*>(&shim_BinaryFileHeader_IsValid)},
+    {"_ZNK2nn4util16BinaryFileHeader11IsRelocatedEv", reinterpret_cast<void*>(&shim_BinaryFileHeader_IsRelocated)},
+    {"_ZNK2nn4util16BinaryFileHeader13GetFirstBlockEv", reinterpret_cast<void*>(&shim_BinaryFileHeader_GetFirstBlock)},
+    {"_ZN2nn4util16BinaryFileHeader13GetFirstBlockEv", reinterpret_cast<void*>(&shim_BinaryFileHeader_GetFirstBlock)},
+    {"_ZN2nn4util16BinaryFileHeader18GetRelocationTableEv", reinterpret_cast<void*>(&shim_BinaryFileHeader_GetRelocationTable)},
+    {"_ZN2nn4util15RelocationTable8RelocateEv", reinterpret_cast<void*>(&shim_RelocationTable_Relocate)},
+    {"_ZN2nn4util11ReferSymbolEPKv", reinterpret_cast<void*>(&shim_nn_util_ReferSymbol)},
+    {"_ZN2nn3err19ApplicationErrorArgC1Ev", reinterpret_cast<void*>(&shim_ApplicationErrorArg_ctor)},
+    {"_ZN2nn3err19ApplicationErrorArg29SetApplicationErrorCodeNumberEj", reinterpret_cast<void*>(&shim_ApplicationErrorArg_SetCode)},
+    {"_ZN2nn3err19ApplicationErrorArg16SetDialogMessageEPKc", reinterpret_cast<void*>(&shim_ApplicationErrorArg_SetDialogMsg)},
+    {"_ZN2nn3err19ApplicationErrorArg20SetFullScreenMessageEPKc", reinterpret_cast<void*>(&shim_ApplicationErrorArg_SetFullMsg)},
+    {"_ZN2nn3err19ApplicationErrorArg15SetLanguageCodeERKNS_8settings12LanguageCodeE", reinterpret_cast<void*>(&shim_ApplicationErrorArg_SetLang)},
+    {"_ZN2nn3err20ShowApplicationErrorERKNS0_19ApplicationErrorArgE", reinterpret_cast<void*>(&shim_nn_err_ShowApplicationError)},
+    {"_ZN2nn5audio32InitializeAudioRendererParameterEPNS0_22AudioRendererParameterE", reinterpret_cast<void*>(&shim_nn_audio_InitParam)},
+    {"_ZN2nn5audio36GetAudioRendererConfigWorkBufferSizeERKNS0_22AudioRendererParameterE", reinterpret_cast<void*>(&shim_nn_audio_GetConfigWorkBufSize)},
+    {"_ZN2nn5audio30GetAudioRendererWorkBufferSizeERKNS0_22AudioRendererParameterE", reinterpret_cast<void*>(&shim_nn_audio_GetRendererWorkBufSize)},
+    {"_ZN2nn5audio29IsValidAudioRendererParameterERKNS0_22AudioRendererParameterE", reinterpret_cast<void*>(&shim_nn_audio_IsValidParam)},
+    {"_ZN2nn5audio29InitializeAudioRendererConfigEPNS0_19AudioRendererConfigERKNS0_22AudioRendererParameterEPvm", reinterpret_cast<void*>(&shim_nn_audio_InitConfig)},
+    {"_ZN2nn5audio17OpenAudioRendererEPNS0_19AudioRendererHandleEPNS_2os11SystemEventERKNS0_22AudioRendererParameterEPvm", reinterpret_cast<void*>(&shim_nn_audio_OpenRenderer)},
+    {"_ZN2nn5audio18StartAudioRendererENS0_19AudioRendererHandleE", reinterpret_cast<void*>(&shim_nn_audio_StartRenderer)},
+    {"_ZN2nn5audio26RequestUpdateAudioRendererENS0_19AudioRendererHandleEPKNS0_19AudioRendererConfigE", reinterpret_cast<void*>(&shim_nn_audio_RequestUpdateRenderer)},
+    {"_ZN2nn5audio15AcquireFinalMixEPNS0_19AudioRendererConfigEPNS0_12FinalMixTypeEi", reinterpret_cast<void*>(&shim_nn_audio_AcquireTrue)},
+    {"_ZN2nn5audio13AcquireSubMixEPNS0_19AudioRendererConfigEPNS0_10SubMixTypeEii", reinterpret_cast<void*>(&shim_nn_audio_AcquireTrue)},
+    {"_ZN2nn5audio20SetSubMixDestinationEPNS0_19AudioRendererConfigEPNS0_10SubMixTypeEPNS0_12FinalMixTypeE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5audio18SetSubMixMixVolumeEPNS0_10SubMixTypeEPNS0_12FinalMixTypeEfii", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5audio16AcquireVoiceSlotEPNS0_19AudioRendererConfigEPNS0_9VoiceTypeEiiNS0_12SampleFormatEiPKvm", reinterpret_cast<void*>(&shim_nn_audio_AcquireTrue)},
+    {"_ZN2nn5audio16ReleaseVoiceSlotEPNS0_19AudioRendererConfigEPNS0_9VoiceTypeE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5audio19SetVoiceDestinationEPNS0_19AudioRendererConfigEPNS0_9VoiceTypeEPNS0_10SubMixTypeE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5audio17SetVoiceMixVolumeEPNS0_9VoiceTypeEPNS0_10SubMixTypeEfii", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5audio13SetVoicePitchEPNS0_9VoiceTypeEf", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5audio17SetVoicePlayStateEPNS0_9VoiceTypeENS1_9PlayStateE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5audio17GetVoicePlayStateEPKNS0_9VoiceTypeE", reinterpret_cast<void*>(&shim_nn_audio_GetVoicePlayState)},
+    {"_ZN2nn5audio29SetVoiceBiquadFilterParameterEPNS0_9VoiceTypeEiRKNS0_21BiquadFilterParameterE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5audio16AppendWaveBufferEPNS0_9VoiceTypeEPKNS0_10WaveBufferE", reinterpret_cast<void*>(&shim_nn_audio_AppendWaveBuffer)},
+    {"_ZN2nn5audio21GetReleasedWaveBufferEPNS0_9VoiceTypeE", reinterpret_cast<void*>(&shim_nn_audio_GetReleasedWaveBuffer)},
+    {"_ZN2nn5audio18GetWaveBufferCountEPKNS0_9VoiceTypeE", reinterpret_cast<void*>(&shim_nn_audio_GetWaveBufferCount)},
+    {"_ZN2nn5audio12IsVoiceValidEPKNS0_9VoiceTypeE", reinterpret_cast<void*>(&shim_nn_audio_AcquireTrue)},
+    {"_ZN2nn5audio25GetVoicePlayedSampleCountEPKNS0_9VoiceTypeE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5audio17AcquireMemoryPoolEPNS0_19AudioRendererConfigEPNS0_14MemoryPoolTypeEPvm", reinterpret_cast<void*>(&shim_nn_audio_AcquireTrue)},
+    {"_ZN2nn5audio23RequestAttachMemoryPoolEPNS0_14MemoryPoolTypeE", reinterpret_cast<void*>(&shim_nn_audio_AcquireTrue)},
+    {"_ZN2nn5audio13AddDeviceSinkEPNS0_19AudioRendererConfigEPNS0_14DeviceSinkTypeEPNS0_12FinalMixTypeEPKaiPKc", reinterpret_cast<void*>(&shim_nn_audio_AcquireTrue)},
+    {"_ZN2nn5audio19ListAudioDeviceNameEPNS0_15AudioDeviceNameEi", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5audio26SetAudioDeviceOutputVolumeEPKNS0_15AudioDeviceNameEf", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5audio16ParseAdpcmHeaderEPNS0_15AdpcmHeaderInfoEPKvm", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5codec11OpusDecoderC1Ev", reinterpret_cast<void*>(&shim_default_stub)},
+    {"glslcInitialize", reinterpret_cast<void*>(&shim_glslc_Initialize)},
+    {"glslcFinalize", reinterpret_cast<void*>(&shim_glslc_noop)},
+    {"glslcSetAllocator", reinterpret_cast<void*>(&shim_glslc_noop)},
+    {"glslcGetDefaultOptions", reinterpret_cast<void*>(&shim_glslc_noop)},
+    {"glslcGetVersion", reinterpret_cast<void*>(&shim_glslc_noop)},
+    {"glslcCompile", reinterpret_cast<void*>(&shim_glslc_Initialize)},
+    {"glslcCompileSpecialized", reinterpret_cast<void*>(&shim_glslc_Initialize)},
+    {"glslcCompilePreSpecialized", reinterpret_cast<void*>(&shim_glslc_Initialize)},
+    {"_ZN2nn6socket6SocketEiii", reinterpret_cast<void*>(&shim_nn_socket_Error)},
+    {"_ZN2nn6socket5CloseEi", reinterpret_cast<void*>(&shim_nn_socket_Ok)},
+    {"_ZN2nn6socket7ConnectEiPK8sockaddrj", reinterpret_cast<void*>(&shim_nn_socket_Error)},
+    {"_ZN2nn6socket4BindEiPK8sockaddrj", reinterpret_cast<void*>(&shim_nn_socket_Error)},
+    {"_ZN2nn6socket6ListenEii", reinterpret_cast<void*>(&shim_nn_socket_Error)},
+    {"_ZN2nn6socket6AcceptEiP8sockaddrPj", reinterpret_cast<void*>(&shim_nn_socket_Error)},
+    {"_ZN2nn6socket4SendEiPKvmi", reinterpret_cast<void*>(&shim_nn_socket_Error)},
+    {"_ZN2nn6socket4RecvEiPvmi", reinterpret_cast<void*>(&shim_nn_socket_Error)},
+    {"_ZN2nn6socket6SendToEiPKvmiPK8sockaddrj", reinterpret_cast<void*>(&shim_nn_socket_Error)},
+    {"_ZN2nn6socket8RecvFromEiPvmiP8sockaddrPj", reinterpret_cast<void*>(&shim_nn_socket_Error)},
+    {"_ZN2nn6socket8ShutdownEii", reinterpret_cast<void*>(&shim_nn_socket_Ok)},
+    {"_ZN2nn6socket10SetSockOptEiiiPKvj", reinterpret_cast<void*>(&shim_nn_socket_Ok)},
+    {"_ZN2nn6socket11GetPeerNameEiP8sockaddrPj", reinterpret_cast<void*>(&shim_nn_socket_Error)},
+    {"_ZN2nn6socket8InetPtonEiPKcPv", reinterpret_cast<void*>(&shim_nn_socket_Ok)},
+    {"_ZN2nn6socket9InetNtohsEt", reinterpret_cast<void*>(&shim_nn_socket_InetNtohs)},
+    {"_ZN2nn5swkbd27GetRequiredStringBufferSizeEv", reinterpret_cast<void*>(&shim_nn_swkbd_GetStringBufSize)},
+    {"_ZN2nn5swkbd25GetRequiredWorkBufferSizeEb", reinterpret_cast<void*>(&shim_nn_swkbd_GetWorkBufSize)},
+    {"_ZN2nn5swkbd10MakePresetEPNS0_14KeyboardConfigENS0_6PresetE", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5swkbd16SetGuideTextUtf8EPNS0_14KeyboardConfigEPKc", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5swkbd14SetInitialTextEPNS0_15ShowKeyboardArgEPKDs", reinterpret_cast<void*>(&shim_default_stub)},
+    {"_ZN2nn5swkbd12ShowKeyboardEPNS0_6StringERKNS0_15ShowKeyboardArgE", reinterpret_cast<void*>(&shim_nn_swkbd_ShowKeyboard)},
+    {"_ZN2nn6detail21UnexpectedDefaultImplEPKcS2_i", reinterpret_cast<void*>(&shim_nn_UnexpectedDefaultImpl)},
+    {"__nnmusl_init_dso", reinterpret_cast<void*>(&shim_default_stub)},
+    {"__nnmusl_fini_dso", reinterpret_cast<void*>(&shim_default_stub)},
+    {"__nnDetailNintendoSdkNsoFile", reinterpret_cast<void*>(&shim_default_stub)},
     {"_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignEPKcm", reinterpret_cast<void*>(&shim_libcxx_string_assign)},
     {"_ZSt13set_terminatePFvvE", reinterpret_cast<void*>(&shim_std_set_terminate)},
     {"nvnBootstrapLoader", reinterpret_cast<void*>(&shim_nvnBootstrapLoader)},

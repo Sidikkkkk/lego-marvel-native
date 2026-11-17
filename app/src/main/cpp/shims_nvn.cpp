@@ -5,6 +5,7 @@
 #include <ctime>
 #include <cstring>
 #include <cstdint>
+#include <atomic>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
@@ -25,7 +26,7 @@ static std::unordered_map<void*, NvnPoolState> g_Pools;
 static std::unordered_map<void*, NvnBufferState> g_BufferBuilders;
 static std::unordered_map<void*, NvnBufferState> g_Buffers;
 static std::unordered_set<std::string> g_LoggedNvnProcs;
-static uint64_t g_PresentFrameCount = 0;
+std::atomic<uint64_t> g_NvnPresentFrames{0};
 
 extern "C" {
 
@@ -63,18 +64,23 @@ void shim_nvnDeviceGetInteger(const void* device, int pname, int* v) {
 }
 
 uint64_t shim_nvnDeviceGetCurrentTimestampInNanoseconds(const void* device) {
+    ScopedAndroidTls tls;
     struct timespec ts{};
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
 }
 
 void shim_nvnMemoryPoolBuilderSetDefaults(void* builder) {
+    ScopedAndroidTls tls;
     if (builder) memset(builder, 0, 128);
     g_PoolBuilders[builder] = {nullptr, 0};
 }
 
 void shim_nvnMemoryPoolBuilderSetStorage(void* builder, void* memory, size_t size) {
+    ScopedAndroidTls tls;
     g_PoolBuilders[builder] = {memory, size};
+    writeLog("[NVN] nvnMemoryPoolBuilderSetStorage(builder=%p, mem=%p, size=%.2f MB)",
+             builder, memory, size / (1024.0 * 1024.0));
 }
 
 int shim_nvnMemoryPoolInitialize(void* pool, void* builder) {
@@ -98,6 +104,7 @@ int shim_nvnMemoryPoolInitialize(void* pool, void* builder) {
 }
 
 void* shim_nvnMemoryPoolGetBufferAddress(void* pool) {
+    ScopedAndroidTls tls;
     auto it = g_Pools.find(pool);
     if (it != g_Pools.end() && it->second.memory != nullptr) {
         return it->second.memory;
@@ -106,6 +113,7 @@ void* shim_nvnMemoryPoolGetBufferAddress(void* pool) {
 }
 
 uint64_t shim_nvnMemoryPoolGetSize(void* pool) {
+    ScopedAndroidTls tls;
     auto it = g_Pools.find(pool);
     return (it != g_Pools.end()) ? it->second.size : (64ULL * 1024ULL * 1024ULL);
 }
@@ -119,10 +127,10 @@ int shim_nvnQueueInitialize(void* queue, const void* builder) {
 
 void shim_nvnQueuePresentTexture(void* queue, void* window, int textureIndex) {
     ScopedAndroidTls tls;
-    g_PresentFrameCount++;
-    if (g_PresentFrameCount == 1 || (g_PresentFrameCount % 60) == 0) {
+    uint64_t frame = ++g_NvnPresentFrames;
+    if (frame == 1 || (frame % 60) == 0) {
         writeLog("[NVN] nvnQueuePresentTexture(frame=%llu, texIdx=%d)",
-                 (unsigned long long)g_PresentFrameCount, textureIndex);
+                 (unsigned long long)frame, textureIndex);
     }
 }
 
@@ -134,17 +142,20 @@ int shim_nvnWindowInitialize(void* window, const void* builder) {
 }
 
 void shim_nvnBufferBuilderSetDefaults(void* builder) {
+    ScopedAndroidTls tls;
     if (builder) memset(builder, 0, 128);
     g_BufferBuilders[builder] = {nullptr, 0, 0};
 }
 
 void shim_nvnBufferBuilderSetStorage(void* builder, void* pool, int64_t offset, size_t size) {
+    ScopedAndroidTls tls;
     auto it = g_Pools.find(pool);
     NvnPoolState* pState = (it != g_Pools.end()) ? &it->second : nullptr;
     g_BufferBuilders[builder] = {pState, offset, size};
 }
 
 int shim_nvnBufferInitialize(void* buffer, void* builder) {
+    ScopedAndroidTls tls;
     if (buffer) memset(buffer, 0, 128);
     auto it = g_BufferBuilders.find(builder);
     if (it != g_BufferBuilders.end()) {
@@ -154,6 +165,7 @@ int shim_nvnBufferInitialize(void* buffer, void* builder) {
 }
 
 uint64_t shim_nvnBufferGetAddress(void* buffer) {
+    ScopedAndroidTls tls;
     auto it = g_Buffers.find(buffer);
     if (it != g_Buffers.end() && it->second.pool && it->second.pool->memory) {
         return reinterpret_cast<uint64_t>(it->second.pool->memory) + static_cast<uint64_t>(it->second.offset);
