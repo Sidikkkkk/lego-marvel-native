@@ -119,6 +119,7 @@ void installCrashAndSvcHandlers() {
     sigaction(SIGBUS,  &sa, nullptr);
     sigaction(SIGABRT, &sa, nullptr);
     sigaction(SIGFPE,  &sa, nullptr);
+    sigaction(SIGSYS,  &sa, nullptr);
 }
 
 static void patchSwitchInstructions(uint32_t* code, size_t count) {

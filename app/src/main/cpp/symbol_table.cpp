@@ -167,7 +167,7 @@ static void* allocLazyVirtualBlock(size_t alignment, size_t size) {
 
 extern "C" void* shim_malloc(size_t size) {
     ScopedAndroidTls tls;
-    if (size >= 32 * 1024 * 1024) {
+    if (size >= 2 * 1024 * 1024) {
         void* p = allocLazyVirtualBlock(4096, size);
         writeLog("[ALLOC-LAZY] malloc(%.2f MB) -> %p", size / (1024.0 * 1024.0), p);
         return p;
@@ -178,7 +178,7 @@ extern "C" void* shim_malloc(size_t size) {
 extern "C" void* shim_calloc(size_t nmemb, size_t size) {
     ScopedAndroidTls tls;
     size_t total = nmemb * size;
-    if (total >= 32 * 1024 * 1024) {
+    if (total >= 2 * 1024 * 1024) {
         void* p = allocLazyVirtualBlock(4096, total);
         writeLog("[ALLOC-LAZY] calloc(%.2f MB) -> %p", total / (1024.0 * 1024.0), p);
         return p;
@@ -188,7 +188,7 @@ extern "C" void* shim_calloc(size_t nmemb, size_t size) {
 
 extern "C" void* shim_realloc(void* ptr, size_t size) {
     ScopedAndroidTls tls;
-    if (size >= 32 * 1024 * 1024) {
+    if (size >= 2 * 1024 * 1024) {
         void* p = allocLazyVirtualBlock(4096, size);
         writeLog("[ALLOC-LAZY] realloc(%.2f MB) -> %p", size / (1024.0 * 1024.0), p);
         return p;
@@ -209,7 +209,7 @@ extern "C" void shim_free(void* ptr) {
 extern "C" int shim_posix_memalign(void** memptr, size_t alignment, size_t size) {
     ScopedAndroidTls tls;
     if (!memptr) return EINVAL;
-    if (size >= 32 * 1024 * 1024) {
+    if (size >= 2 * 1024 * 1024) {
         void* p = allocLazyVirtualBlock(alignment, size);
         writeLog("[ALLOC-LAZY] posix_memalign(%.2f MB) -> %p", size / (1024.0 * 1024.0), p);
         if (!p) return ENOMEM;
@@ -221,7 +221,7 @@ extern "C" int shim_posix_memalign(void** memptr, size_t alignment, size_t size)
 
 extern "C" void* shim_aligned_alloc(size_t alignment, size_t size) {
     ScopedAndroidTls tls;
-    if (size >= 32 * 1024 * 1024) {
+    if (size >= 2 * 1024 * 1024) {
         void* p = allocLazyVirtualBlock(alignment, size);
         writeLog("[ALLOC-LAZY] aligned_alloc(%.2f MB) -> %p", size / (1024.0 * 1024.0), p);
         return p;

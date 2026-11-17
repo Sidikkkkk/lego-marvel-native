@@ -38,6 +38,7 @@ inline void writeLog(const char* fmt, ...) {
     if (g_LogFd >= 0) {
         buf[len] = '\n';
         write(g_LogFd, buf, static_cast<size_t>(len + 1));
+        fdatasync(g_LogFd);
     }
 }
 
