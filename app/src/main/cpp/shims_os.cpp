@@ -31,7 +31,7 @@ struct HostEvent {
     pthread_mutex_t mtx;
     pthread_cond_t cond;
     bool signaled;
-    int clearMode; // 0 = ManualClear, 1 = AutoClear
+    int clearMode;
 };
 
 struct HostSemaphore {
@@ -55,6 +55,18 @@ static std::unordered_map<void*, HostMutex*> g_MutexMap;
 static std::unordered_map<void*, HostEvent*> g_EventMap;
 static std::unordered_map<void*, HostSemaphore*> g_SemaMap;
 static std::unordered_map<void*, HostThread*> g_ThreadMap;
+
+static void* allocLazyAlignedBlock(size_t alignment, size_t size) {
+    size_t pageAlign = (alignment > 4096) ? alignment : 4096;
+    size_t allocSize = (size + pageAlign + 4095) & ~4095ULL;
+    void* raw = mmap(nullptr, allocSize, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (raw == MAP_FAILED) return nullptr;
+
+    uintptr_t rawAddr = reinterpret_cast<uintptr_t>(raw);
+    uintptr_t alignedAddr = (rawAddr + pageAlign - 1) & ~(pageAlign - 1);
+    return reinterpret_cast<void*>(alignedAddr);
+}
 
 static HostMutex* getOrCreateMutex(void* key, bool recursive = true) {
     pthread_mutex_lock(&g_SyncMapLock);
@@ -176,11 +188,22 @@ void shim_StandardAllocator_Init(void* thisPtr, void* addr, size_t size, bool is
 
 void* shim_StandardAllocator_Alloc(void* thisPtr, size_t size) {
     ScopedAndroidTls tls;
+    if (size >= 4 * 1024 * 1024) {
+        void* p = allocLazyAlignedBlock(4096, size);
+        writeLog("[MEM-LAZY] StandardAllocator::Alloc(%.2f MB) -> %p", size / (1024.0 * 1024.0), p);
+        return p;
+    }
     return malloc(size > 0 ? size : 16);
 }
 
 void* shim_StandardAllocator_AllocAligned(void* thisPtr, size_t size, size_t alignment) {
     ScopedAndroidTls tls;
+    if (size >= 4 * 1024 * 1024) {
+        void* p = allocLazyAlignedBlock(alignment, size);
+        writeLog("[MEM-LAZY] StandardAllocator::AllocAligned(%.2f MB, align=0x%zx) -> %p",
+                 size / (1024.0 * 1024.0), alignment, p);
+        return p;
+    }
     if (alignment < sizeof(void*)) alignment = sizeof(void*);
     void* ptr = nullptr;
     if (posix_memalign(&ptr, alignment, size > 0 ? size : alignment) != 0) return nullptr;
@@ -189,11 +212,21 @@ void* shim_StandardAllocator_AllocAligned(void* thisPtr, size_t size, size_t ali
 
 void* shim_StandardAllocator_Realloc(void* thisPtr, void* ptr, size_t newSize) {
     ScopedAndroidTls tls;
+    if (newSize >= 4 * 1024 * 1024) {
+        void* p = allocLazyAlignedBlock(4096, newSize);
+        writeLog("[MEM-LAZY] StandardAllocator::Realloc(%.2f MB) -> %p", newSize / (1024.0 * 1024.0), p);
+        return p;
+    }
     return realloc(ptr, newSize);
 }
 
 void shim_StandardAllocator_Free(void* thisPtr, void* ptr) {
     ScopedAndroidTls tls;
+    if (!ptr) return;
+    uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+    if ((addr & 0xFFF) == 0 && addr >= 0x7000000000ULL) {
+        return;
+    }
     free(ptr);
 }
 
@@ -440,7 +473,7 @@ int shim_nn_oe_GetCurrentFocusState() {
 }
 
 uint32_t shim_nn_oe_PopNotificationMessage() {
-    usleep(16000); // Cegah HandleMessageAutoLoop busy-spin 100% CPU
+    usleep(16000);
     return 0;
 }
 
